@@ -20,15 +20,6 @@ enum FacultyScope {
     Custom,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct FacultyIdentifier {
-    first_name: String,
-    last_name: String,
-    #[serde(default)]
-    identifier: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubmissionPayload {
@@ -45,7 +36,7 @@ struct SubmissionPayload {
     #[serde(default)]
     program_filters: Vec<String>,
     #[serde(default)]
-    custom_faculty: Vec<FacultyIdentifier>,
+    custom_faculty_path: Option<String>,
     faculty_recs_per_student: u32,
     student_recs_per_faculty: u32,
     update_embeddings: bool,
@@ -74,7 +65,7 @@ struct SubmissionDetails {
     faculty_scope: FacultyScope,
     validated_paths: Vec<PathConfirmation>,
     program_filters: Vec<String>,
-    custom_faculty: Vec<FacultyIdentifier>,
+    custom_faculty_path: Option<String>,
     recommendations_per_student: u32,
     recommendations_per_faculty: u32,
     update_embeddings: bool,
@@ -99,7 +90,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         directory_path,
         faculty_scope,
         program_filters,
-        custom_faculty,
+        custom_faculty_path,
         faculty_recs_per_student,
         student_recs_per_faculty,
         update_embeddings,
@@ -132,11 +123,9 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         }
         TaskType::Spreadsheet => {
             let spreadsheet = resolve_existing_path(spreadsheet_path, false, "Spreadsheet file")?;
-            if let Some(message) = validate_extension(
-                &spreadsheet,
-                &["csv", "tsv", "xlsx", "xls", "ods"],
-                "spreadsheet",
-            ) {
+            if let Some(message) =
+                validate_extension(&spreadsheet, &["tsv", "txt", "xlsx", "xls"], "spreadsheet")
+            {
                 warnings.push(message);
             }
             validated_paths.push(PathConfirmation::new("Spreadsheet", &spreadsheet));
@@ -153,16 +142,25 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
     }
 
     let normalized_programs = normalize_programs(program_filters);
-    let sanitized_faculty = sanitize_faculty_list(custom_faculty);
+    let mut faculty_roster_path = None;
 
-    match faculty_scope {
-        FacultyScope::Program if normalized_programs.is_empty() => {
-            return Err("Provide at least one program to limit the faculty list.".into());
+    if matches!(faculty_scope, FacultyScope::Custom) {
+        let roster = resolve_existing_path(custom_faculty_path, false, "Faculty list")?;
+        if let Some(message) =
+            validate_extension(&roster, &["tsv", "txt", "xlsx", "xls"], "faculty list")
+        {
+            warnings.push(message);
         }
-        FacultyScope::Custom if sanitized_faculty.is_empty() => {
-            return Err("Add at least one faculty member to the custom list.".into());
-        }
-        _ => {}
+        faculty_roster_path = Some(roster.to_string_lossy().into_owned());
+        validated_paths.push(PathConfirmation::new("Faculty list", &roster));
+    }
+
+    if matches!(faculty_scope, FacultyScope::Program) && normalized_programs.is_empty() {
+        return Err("Provide at least one program to limit the faculty list.".into());
+    }
+
+    if matches!(faculty_scope, FacultyScope::Custom) && faculty_roster_path.is_none() {
+        return Err("Provide a faculty roster spreadsheet to limit the faculty list.".into());
     }
 
     let details = SubmissionDetails {
@@ -173,10 +171,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
             FacultyScope::Program => normalized_programs.clone(),
             _ => Vec::new(),
         },
-        custom_faculty: match faculty_scope {
-            FacultyScope::Custom => sanitized_faculty.clone(),
-            _ => Vec::new(),
-        },
+        custom_faculty_path: faculty_roster_path.clone(),
         recommendations_per_student: faculty_recs_per_student,
         recommendations_per_faculty: student_recs_per_faculty,
         update_embeddings,
@@ -190,7 +185,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         student_recs_per_faculty,
         update_embeddings,
         details.program_filters.len(),
-        details.custom_faculty.len(),
+        faculty_roster_path.is_some(),
     );
 
     Ok(SubmissionResponse {
@@ -218,43 +213,6 @@ fn normalize_programs(programs: Vec<String>) -> Vec<String> {
         let key = trimmed.to_lowercase();
         if seen.insert(key) {
             cleaned.push(trimmed.to_string());
-        }
-    }
-
-    cleaned
-}
-
-fn sanitize_faculty_list(entries: Vec<FacultyIdentifier>) -> Vec<FacultyIdentifier> {
-    let mut seen = HashSet::new();
-    let mut cleaned = Vec::new();
-
-    for entry in entries {
-        let first = entry.first_name.trim();
-        let last = entry.last_name.trim();
-        if first.is_empty() || last.is_empty() {
-            continue;
-        }
-
-        let identifier = entry
-            .identifier
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(String::from);
-
-        let key = format!(
-            "{}::{}::{}",
-            first.to_lowercase(),
-            last.to_lowercase(),
-            identifier.as_deref().unwrap_or_default().to_lowercase()
-        );
-
-        if seen.insert(key) {
-            cleaned.push(FacultyIdentifier {
-                first_name: first.to_string(),
-                last_name: last.to_string(),
-                identifier,
-            });
         }
     }
 
@@ -349,7 +307,7 @@ fn build_summary(
     students_per_faculty: u32,
     update_embeddings: bool,
     program_count: usize,
-    custom_count: usize,
+    has_custom_roster: bool,
 ) -> String {
     let input_summary = match task_type {
         TaskType::Prompt => "a single prompt".to_string(),
@@ -364,10 +322,13 @@ fn build_summary(
             "faculty filtered to {program_count} program{}",
             if program_count == 1 { "" } else { "s" }
         ),
-        FacultyScope::Custom => format!(
-            "{custom_count} custom faculty member{}",
-            if custom_count == 1 { "" } else { "s" }
-        ),
+        FacultyScope::Custom => {
+            if has_custom_roster {
+                "the provided faculty roster spreadsheet".to_string()
+            } else {
+                "a custom faculty roster".to_string()
+            }
+        }
     };
 
     let mut summary = format!(
