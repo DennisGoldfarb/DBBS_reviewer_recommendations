@@ -203,7 +203,7 @@ function App() {
     <div className="app-shell">
       <main>
         <header className="page-header">
-          <h1>Reviewer Recommendation Console</h1>
+          <h1>DBBS Faculty Recommendation Console</h1>
           <p className="description">
             Configure matching runs, narrow the faculty roster, and track the
             options that will be sent to the matching backend.

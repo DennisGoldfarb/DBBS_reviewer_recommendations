@@ -478,8 +478,16 @@ button.add-entry-button:not(:disabled):hover {
     color: #cbd5f5;
   }
 
+  .page-header h1 {
+    color: #f8fafc;
+  }
+
   .input-heading,
   .number-row label {
+    color: #e2e8f0;
+  }
+
+  .input-stack label {
     color: #e2e8f0;
   }
 
