@@ -211,10 +211,113 @@ button.add-entry-button:not(:disabled):hover {
   border-radius: 12px;
 }
 
+.preview-status {
+  margin-top: 0.75rem;
+  color: #2563eb;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.preview-error {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.95rem;
+  border-radius: 12px;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  font-size: 0.9rem;
+}
+
 .small-note {
   margin: 0;
   color: #64748b;
   font-size: 0.825rem;
+}
+
+.spreadsheet-preview-card {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #cbd5f5;
+}
+
+.column-selector-group {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.column-selector h4 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.column-checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.column-checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border-radius: 10px;
+  border: 1px solid #cbd5f5;
+  padding: 0.55rem 0.75rem;
+  background: #ffffff;
+}
+
+.column-checkbox-option input[type="checkbox"] {
+  accent-color: #2563eb;
+}
+
+.column-checkbox-option span {
+  color: #0f172a;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.preview-table-wrapper {
+  overflow-x: auto;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.preview-table th,
+.preview-table td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid #cbd5f5;
+  text-align: left;
+  font-size: 0.85rem;
+  vertical-align: top;
+}
+
+.preview-table th {
+  background: #e2e8f0;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.preview-table td {
+  color: #334155;
+  word-break: break-word;
+  max-width: 320px;
+}
+
+.preview-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .checkbox-row {
@@ -523,6 +626,16 @@ button.add-entry-button:not(:disabled):hover {
     color: #cbd5f5;
   }
 
+  .preview-status {
+    color: #93c5fd;
+  }
+
+  .preview-error {
+    background: #7f1d1d;
+    border-color: #dc2626;
+    color: #fee2e2;
+  }
+
   .checkbox-row {
     background: #111827;
     border-color: #1f2937;
@@ -531,6 +644,33 @@ button.add-entry-button:not(:disabled):hover {
   .detail-card {
     background: #111827;
     border-color: #1f2937;
+  }
+
+  .spreadsheet-preview-card {
+    background: #111827;
+    border-color: #1f2937;
+  }
+
+  .column-checkbox-option {
+    background: #0f172a;
+    border-color: #1f2937;
+  }
+
+  .column-checkbox-option span {
+    color: #e2e8f0;
+  }
+
+  .preview-table {
+    background: #0f172a;
+  }
+
+  .preview-table th {
+    background: #1f2937;
+    color: #f8fafc;
+  }
+
+  .preview-table td {
+    color: #cbd5f5;
   }
 
   .result-card {
