@@ -1,22 +1,10 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
 type FacultyScope = "all" | "program" | "custom";
-
-interface FacultyFormEntry {
-  firstName: string;
-  lastName: string;
-  identifier: string;
-}
-
-interface FacultyEntry {
-  firstName: string;
-  lastName: string;
-  identifier?: string;
-}
 
 interface PathConfirmation {
   label: string;
@@ -28,7 +16,7 @@ interface SubmissionDetails {
   facultyScope: FacultyScope;
   validatedPaths: PathConfirmation[];
   programFilters: string[];
-  customFaculty: FacultyEntry[];
+  customFacultyPath: string | null;
   recommendationsPerStudent: number;
   recommendationsPerFaculty: number;
   updateEmbeddings: boolean;
@@ -46,26 +34,11 @@ interface StatusMessage {
   message: string;
 }
 
-const createFacultyFormEntry = (): FacultyFormEntry => ({
-  firstName: "",
-  lastName: "",
-  identifier: "",
-});
-
 const parsePrograms = (raw: string): string[] =>
   raw
     .split(/[\n,]/)
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
-
-const sanitizeFacultyEntries = (entries: FacultyFormEntry[]): FacultyEntry[] =>
-  entries
-    .map((entry) => ({
-      firstName: entry.firstName.trim(),
-      lastName: entry.lastName.trim(),
-      identifier: entry.identifier.trim() || undefined,
-    }))
-    .filter((entry) => entry.firstName.length > 0 && entry.lastName.length > 0);
 
 function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
@@ -75,8 +48,8 @@ function App() {
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
   const [programInput, setProgramInput] = useState("");
-  const [customFaculty, setCustomFaculty] = useState<FacultyFormEntry[]>([]);
-  const [facultyRecCount, setFacultyRecCount] = useState("3");
+  const [customFacultyPath, setCustomFacultyPath] = useState("");
+  const [facultyRecCount, setFacultyRecCount] = useState("10");
   const [studentRecCount, setStudentRecCount] = useState("0");
   const [updateEmbeddings, setUpdateEmbeddings] = useState(false);
 
@@ -85,11 +58,6 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUpdatingEmbeddings, setIsUpdatingEmbeddings] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
-
-  const sanitizedCustomFaculty = useMemo(
-    () => sanitizeFacultyEntries(customFaculty),
-    [customFaculty],
-  );
 
   const handleTaskTypeChange = (value: TaskType) => {
     setTaskType(value);
@@ -102,8 +70,8 @@ function App() {
     setError(null);
     setResult(null);
 
-    if (value === "custom" && customFaculty.length === 0) {
-      setCustomFaculty([createFacultyFormEntry()]);
+    if (value !== "custom") {
+      setCustomFacultyPath("");
     }
   };
 
@@ -165,9 +133,9 @@ function App() {
               facultyScope === "program" && programFilters.length > 0
                 ? programFilters
                 : undefined,
-            customFaculty:
-              facultyScope === "custom" && sanitizedCustomFaculty.length > 0
-                ? sanitizedCustomFaculty
+            customFacultyPath:
+              facultyScope === "custom" && customFacultyPath.trim().length > 0
+                ? customFacultyPath.trim()
                 : undefined,
             facultyRecsPerStudent: facultyRecommendations,
             studentRecsPerFaculty: studentRecommendations,
@@ -330,7 +298,7 @@ function App() {
                         filters: [
                           {
                             name: "Spreadsheets",
-                            extensions: ["csv", "tsv", "xlsx", "xls", "ods"],
+                            extensions: ["tsv", "xlsx", "xls"],
                           },
                         ],
                       })
@@ -351,6 +319,7 @@ function App() {
                 <p className="small-note">
                   Each row should include an identifier column (for example,
                   name or ID) and a column containing the student's prompt.
+                  TSV or Excel formats are supported.
                 </p>
               </div>
             )}
@@ -447,83 +416,38 @@ function App() {
 
             {facultyScope === "custom" && (
               <div className="input-stack">
-                <div className="faculty-entry-list">
-                  {customFaculty.map((entry, index) => (
-                    <div className="faculty-entry-row" key={index}>
-                      <input
-                        type="text"
-                        placeholder="First name"
-                        value={entry.firstName}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setCustomFaculty((previous) =>
-                            previous.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, firstName: value }
-                                : item,
-                            ),
-                          );
-                        }}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Last name"
-                        value={entry.lastName}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setCustomFaculty((previous) =>
-                            previous.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, lastName: value }
-                                : item,
-                            ),
-                          );
-                        }}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Identifier (optional)"
-                        value={entry.identifier}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setCustomFaculty((previous) =>
-                            previous.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, identifier: value }
-                                : item,
-                            ),
-                          );
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="remove-button"
-                        onClick={() =>
-                          setCustomFaculty((previous) =>
-                            previous.filter((_, itemIndex) => itemIndex !== index),
-                          )
-                        }
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
+                <label>Faculty roster spreadsheet</label>
+                <div className="button-row inline">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      handleFileSelection(setCustomFacultyPath, {
+                        multiple: false,
+                        filters: [
+                          {
+                            name: "Faculty rosters",
+                            extensions: ["tsv", "xlsx", "xls"],
+                          },
+                        ],
+                      })
+                    }
+                  >
+                    Browse…
+                  </button>
+                  <input
+                    type="text"
+                    value={customFacultyPath}
+                    onChange={(event) => setCustomFacultyPath(event.target.value)}
+                    placeholder="Paste or confirm the faculty roster path"
+                  />
                 </div>
-                <button
-                  type="button"
-                  className="add-entry-button"
-                  onClick={() =>
-                    setCustomFaculty((previous) => [
-                      ...previous,
-                      createFacultyFormEntry(),
-                    ])
-                  }
-                >
-                  Add faculty entry
-                </button>
+                {customFacultyPath && (
+                  <div className="path-preview">{customFacultyPath}</div>
+                )}
                 <p className="small-note">
-                  Provide first and last names. Include an internal identifier
-                  when available to avoid name collisions.
+                  Upload a TSV or Excel file listing the available faculty
+                  members.
                 </p>
               </div>
             )}
@@ -648,28 +572,13 @@ function App() {
                       </dd>
                     </>
                   )}
-                  {result.details.customFaculty.length > 0 && (
+                  {result.details.customFacultyPath && (
                     <>
-                      <dt>Faculty list</dt>
+                      <dt>Faculty roster</dt>
                       <dd>
-                        <table className="faculty-table">
-                          <thead>
-                            <tr>
-                              <th>Name</th>
-                              <th>Identifier</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {result.details.customFaculty.map((entry, index) => (
-                              <tr key={`${entry.firstName}-${entry.lastName}-${index}`}>
-                                <td>
-                                  {entry.firstName} {entry.lastName}
-                                </td>
-                                <td>{entry.identifier ?? "—"}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                        <div className="path-preview">
+                          {result.details.customFacultyPath}
+                        </div>
                       </dd>
                     </>
                   )}
