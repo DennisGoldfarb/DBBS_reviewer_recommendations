@@ -28,6 +28,13 @@ interface PathConfirmation {
   path: string;
 }
 
+interface SpreadsheetPreview {
+  headers: string[];
+  rows: string[][];
+  suggestedPromptColumns: number[];
+  suggestedIdentifierColumns: number[];
+}
+
 interface SubmissionDetails {
   taskType: TaskType;
   facultyScope: FacultyScope;
@@ -38,6 +45,8 @@ interface SubmissionDetails {
   recommendationsPerFaculty: number;
   updateEmbeddings: boolean;
   promptPreview?: string;
+  spreadsheetPromptColumns: string[];
+  spreadsheetIdentifierColumns: string[];
 }
 
 interface SubmissionResponse {
@@ -64,16 +73,41 @@ function App() {
   const [studentRecCount, setStudentRecCount] = useState("0");
   const [updateEmbeddings, setUpdateEmbeddings] = useState(false);
 
+  const [spreadsheetPreview, setSpreadsheetPreview] =
+    useState<SpreadsheetPreview | null>(null);
+  const [spreadsheetPreviewError, setSpreadsheetPreviewError] =
+    useState<string | null>(null);
+  const [isLoadingSpreadsheetPreview, setIsLoadingSpreadsheetPreview] =
+    useState(false);
+  const [selectedIdentifierColumns, setSelectedIdentifierColumns] = useState<
+    number[]
+  >([]);
+  const [selectedPromptColumns, setSelectedPromptColumns] = useState<number[]>(
+    [],
+  );
+
   const [result, setResult] = useState<SubmissionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUpdatingEmbeddings, setIsUpdatingEmbeddings] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
 
+  const resetSpreadsheetConfiguration = () => {
+    setSpreadsheetPreview(null);
+    setSpreadsheetPreviewError(null);
+    setSelectedIdentifierColumns([]);
+    setSelectedPromptColumns([]);
+    setIsLoadingSpreadsheetPreview(false);
+  };
+
   const handleTaskTypeChange = (value: TaskType) => {
     setTaskType(value);
     setError(null);
     setResult(null);
+
+    if (value !== "spreadsheet") {
+      resetSpreadsheetConfiguration();
+    }
   };
 
   const handleFacultyScopeChange = (value: FacultyScope) => {
@@ -110,14 +144,131 @@ function App() {
       const selection = await open(options);
       if (typeof selection === "string") {
         setter(selection);
+        return selection;
       }
+      return null;
     } catch (selectionError) {
       const message =
         selectionError instanceof Error
           ? selectionError.message
           : String(selectionError);
       setError(`Unable to open a file dialog: ${message}`);
+      return null;
     }
+  };
+
+  const handleSpreadsheetPathInput = (value: string) => {
+    setSpreadsheetPath(value);
+    setError(null);
+    setResult(null);
+    resetSpreadsheetConfiguration();
+  };
+
+  const loadSpreadsheetPreview = async (path: string) => {
+    const trimmed = path.trim();
+    if (trimmed.length === 0) {
+      resetSpreadsheetConfiguration();
+      return;
+    }
+
+    setIsLoadingSpreadsheetPreview(true);
+    setSpreadsheetPreviewError(null);
+    setError(null);
+    setResult(null);
+
+    try {
+      const preview = await invoke<SpreadsheetPreview>("analyze_spreadsheet", {
+        path: trimmed,
+      });
+
+      const identifierSuggestions = Array.from(
+        new Set(preview.suggestedIdentifierColumns),
+      ).sort((a, b) => a - b);
+      const promptSuggestions = Array.from(
+        new Set(preview.suggestedPromptColumns),
+      ).sort((a, b) => a - b);
+
+      setSpreadsheetPreview(preview);
+      setSelectedIdentifierColumns(identifierSuggestions);
+      setSelectedPromptColumns(promptSuggestions);
+    } catch (analysisError) {
+      const message =
+        analysisError instanceof Error
+          ? analysisError.message
+          : String(analysisError);
+      setSpreadsheetPreview(null);
+      setSpreadsheetPreviewError(message);
+      setSelectedIdentifierColumns([]);
+      setSelectedPromptColumns([]);
+    } finally {
+      setIsLoadingSpreadsheetPreview(false);
+    }
+  };
+
+  const handleSpreadsheetSelection = async () => {
+    const selection = await handleFileSelection(setSpreadsheetPath, {
+      multiple: false,
+      filters: [
+        {
+          name: "Spreadsheets",
+          extensions: ["tsv", "txt", "xlsx", "xls"],
+        },
+      ],
+    });
+
+    if (selection) {
+      await loadSpreadsheetPreview(selection);
+    }
+  };
+
+  const toggleIdentifierColumn = (index: number) => {
+    setSelectedIdentifierColumns((current) => {
+      const updated = current.includes(index)
+        ? current.filter((entry) => entry !== index)
+        : [...current, index];
+      updated.sort((a, b) => a - b);
+      return updated;
+    });
+    setError(null);
+    setResult(null);
+  };
+
+  const togglePromptColumn = (index: number) => {
+    setSelectedPromptColumns((current) => {
+      const updated = current.includes(index)
+        ? current.filter((entry) => entry !== index)
+        : [...current, index];
+      updated.sort((a, b) => a - b);
+      return updated;
+    });
+    setError(null);
+    setResult(null);
+  };
+
+  const getColumnLabel = (index: number) => {
+    if (!spreadsheetPreview) {
+      return `Column ${index + 1}`;
+    }
+
+    const header = spreadsheetPreview.headers[index];
+    if (!header) {
+      return `Column ${index + 1}`;
+    }
+
+    const trimmed = header.trim();
+    return trimmed.length > 0 ? trimmed : `Column ${index + 1}`;
+  };
+
+  const mapSelectedColumns = (indexes: number[]) => {
+    const unique = Array.from(new Set(indexes)).filter((index) => index >= 0);
+
+    if (!spreadsheetPreview) {
+      return unique.map((index) => `Column ${index + 1}`);
+    }
+
+    return unique
+      .filter((index) => index < spreadsheetPreview.headers.length)
+      .map((index) => getColumnLabel(index));
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -135,6 +286,33 @@ function App() {
       0,
       Number.parseInt(studentRecCount, 10) || 0,
     );
+
+    if (taskType === "spreadsheet") {
+      const trimmedPath = spreadsheetPath.trim();
+      if (trimmedPath.length === 0) {
+        setError("Provide a spreadsheet containing student prompts.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!spreadsheetPreview) {
+        setError("Load the spreadsheet preview to choose columns before submitting.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (selectedIdentifierColumns.length === 0) {
+        setError("Select at least one column that uniquely identifies each student.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (selectedPromptColumns.length === 0) {
+        setError("Select at least one column containing the student prompts.");
+        setIsSubmitting(false);
+        return;
+      }
+    }
 
     try {
       const response = await invoke<SubmissionResponse>(
@@ -167,6 +345,14 @@ function App() {
             facultyRecsPerStudent: facultyRecommendations,
             studentRecsPerFaculty: studentRecommendations,
             updateEmbeddings,
+            spreadsheetPromptColumns:
+              taskType === "spreadsheet"
+                ? mapSelectedColumns(selectedPromptColumns)
+                : undefined,
+            spreadsheetIdentifierColumns:
+              taskType === "spreadsheet"
+                ? mapSelectedColumns(selectedIdentifierColumns)
+                : undefined,
           },
         },
       );
@@ -320,29 +506,129 @@ function App() {
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() =>
-                      handleFileSelection(setSpreadsheetPath, {
-                        multiple: false,
-                        filters: [
-                          {
-                            name: "Spreadsheets",
-                            extensions: ["tsv", "txt", "xlsx", "xls"],
-                          },
-                        ],
-                      })
-                    }
+                    onClick={handleSpreadsheetSelection}
                   >
                     Browse…
                   </button>
                   <input
                     type="text"
                     value={spreadsheetPath}
-                    onChange={(event) => setSpreadsheetPath(event.target.value)}
+                    onChange={(event) =>
+                      handleSpreadsheetPathInput(event.target.value)
+                    }
                     placeholder="Paste or confirm the spreadsheet path"
                   />
+                  <button
+                    type="button"
+                    onClick={() => void loadSpreadsheetPreview(spreadsheetPath)}
+                    disabled={
+                      spreadsheetPath.trim().length === 0 ||
+                      isLoadingSpreadsheetPreview
+                    }
+                  >
+                    {isLoadingSpreadsheetPreview
+                      ? "Loading preview…"
+                      : "Load preview"}
+                  </button>
                 </div>
                 {spreadsheetPath && (
                   <div className="path-preview">{spreadsheetPath}</div>
+                )}
+                {spreadsheetPreviewError && (
+                  <div className="preview-error">{spreadsheetPreviewError}</div>
+                )}
+                {isLoadingSpreadsheetPreview && !spreadsheetPreviewError && (
+                  <div className="preview-status">
+                    Analyzing the spreadsheet…
+                  </div>
+                )}
+                {spreadsheetPreview && (
+                  <div className="spreadsheet-preview-card">
+                    <div className="column-selector-group">
+                      <div className="column-selector">
+                        <h4>Identifier columns</h4>
+                        <p className="small-note">
+                          Combine these columns to create a unique identifier
+                          for each student.
+                        </p>
+                        <div className="column-checkbox-list">
+                          {spreadsheetPreview.headers.map((_, index) => {
+                            const label = getColumnLabel(index);
+                            const isChecked =
+                              selectedIdentifierColumns.includes(index);
+                            return (
+                              <label
+                                key={`identifier-${index}`}
+                                className="column-checkbox-option"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleIdentifierColumn(index)}
+                                />
+                                <span>{label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="column-selector">
+                        <h4>Prompt columns</h4>
+                        <p className="small-note">
+                          Select the columns that contain student research
+                          interests. Their text will be merged before
+                          embedding.
+                        </p>
+                        <div className="column-checkbox-list">
+                          {spreadsheetPreview.headers.map((_, index) => {
+                            const label = getColumnLabel(index);
+                            const isChecked =
+                              selectedPromptColumns.includes(index);
+                            return (
+                              <label
+                                key={`prompt-${index}`}
+                                className="column-checkbox-option"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => togglePromptColumn(index)}
+                                />
+                                <span>{label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="preview-table-wrapper">
+                      <table className="preview-table">
+                        <thead>
+                          <tr>
+                            {spreadsheetPreview.headers.map((_, index) => (
+                              <th key={`header-${index}`}>
+                                {getColumnLabel(index)}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {spreadsheetPreview.rows.map((row, rowIndex) => (
+                            <tr key={`row-${rowIndex}`}>
+                              {row.map((value, columnIndex) => (
+                                <td
+                                  key={`cell-${rowIndex}-${columnIndex}`}
+                                  title={value}
+                                >
+                                  {value}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )}
                 <p className="small-note">
                   Each row should include an identifier column (for example,
@@ -587,6 +873,34 @@ function App() {
                               <strong>{path.label}:</strong> {path.path}
                             </li>
                           ))}
+                        </ul>
+                      </dd>
+                    </>
+                  )}
+                  {result.details.spreadsheetIdentifierColumns.length > 0 && (
+                    <>
+                      <dt>Identifier columns</dt>
+                      <dd>
+                        <ul className="path-list">
+                          {result.details.spreadsheetIdentifierColumns.map(
+                            (column) => (
+                              <li key={`identifier-${column}`}>{column}</li>
+                            ),
+                          )}
+                        </ul>
+                      </dd>
+                    </>
+                  )}
+                  {result.details.spreadsheetPromptColumns.length > 0 && (
+                    <>
+                      <dt>Prompt columns</dt>
+                      <dd>
+                        <ul className="path-list">
+                          {result.details.spreadsheetPromptColumns.map(
+                            (column) => (
+                              <li key={`prompt-${column}`}>{column}</li>
+                            ),
+                          )}
                         </ul>
                       </dd>
                     </>

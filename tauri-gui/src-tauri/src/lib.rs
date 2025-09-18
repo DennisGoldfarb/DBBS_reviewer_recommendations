@@ -1,6 +1,10 @@
+use calamine::{open_workbook_auto, DataType, Reader};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -40,6 +44,10 @@ struct SubmissionPayload {
     faculty_recs_per_student: u32,
     student_recs_per_faculty: u32,
     update_embeddings: bool,
+    #[serde(default)]
+    spreadsheet_prompt_columns: Vec<String>,
+    #[serde(default)]
+    spreadsheet_identifier_columns: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -70,6 +78,8 @@ struct SubmissionDetails {
     recommendations_per_faculty: u32,
     update_embeddings: bool,
     prompt_preview: Option<String>,
+    spreadsheet_prompt_columns: Vec<String>,
+    spreadsheet_identifier_columns: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +88,15 @@ struct SubmissionResponse {
     summary: String,
     warnings: Vec<String>,
     details: SubmissionDetails,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpreadsheetPreview {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    suggested_prompt_columns: Vec<usize>,
+    suggested_identifier_columns: Vec<usize>,
 }
 
 #[tauri::command]
@@ -94,6 +113,8 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         faculty_recs_per_student,
         student_recs_per_faculty,
         update_embeddings,
+        spreadsheet_prompt_columns,
+        spreadsheet_identifier_columns,
     } = payload;
 
     if faculty_recs_per_student == 0 {
@@ -103,6 +124,8 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
     let mut warnings = Vec::new();
     let mut validated_paths = Vec::new();
     let mut prompt_preview = None;
+    let mut selected_prompt_columns = Vec::new();
+    let mut selected_identifier_columns = Vec::new();
 
     match task_type {
         TaskType::Prompt => {
@@ -129,6 +152,17 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
                 warnings.push(message);
             }
             validated_paths.push(PathConfirmation::new("Spreadsheet", &spreadsheet));
+
+            selected_prompt_columns = normalize_columns(spreadsheet_prompt_columns);
+            selected_identifier_columns = normalize_columns(spreadsheet_identifier_columns);
+
+            if selected_identifier_columns.is_empty() {
+                return Err("Select at least one column to identify each student.".into());
+            }
+
+            if selected_prompt_columns.is_empty() {
+                return Err("Select at least one column containing student prompts.".into());
+            }
         }
         TaskType::Directory => {
             let directory = resolve_existing_path(directory_path, true, "Directory")?;
@@ -176,6 +210,8 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         recommendations_per_faculty: student_recs_per_faculty,
         update_embeddings,
         prompt_preview,
+        spreadsheet_prompt_columns: selected_prompt_columns.clone(),
+        spreadsheet_identifier_columns: selected_identifier_columns.clone(),
     };
 
     let summary = build_summary(
@@ -200,6 +236,25 @@ fn update_faculty_embeddings() -> Result<String, String> {
     Ok("Faculty embeddings update request received. The backend stub only confirms availability in this build.".into())
 }
 
+#[tauri::command]
+fn analyze_spreadsheet(path: String) -> Result<SpreadsheetPreview, String> {
+    if path.trim().is_empty() {
+        return Err("Provide a spreadsheet path to analyze.".into());
+    }
+
+    let spreadsheet = resolve_existing_path(Some(path), false, "Spreadsheet file")?;
+    let (mut headers, mut rows) = read_spreadsheet(&spreadsheet)?;
+    align_row_lengths(&mut headers, &mut rows);
+    let (prompt_columns, identifier_columns) = suggest_spreadsheet_columns(&headers, &rows);
+
+    Ok(SpreadsheetPreview {
+        headers,
+        rows,
+        suggested_prompt_columns: prompt_columns,
+        suggested_identifier_columns: identifier_columns,
+    })
+}
+
 fn normalize_programs(programs: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut cleaned = Vec::new();
@@ -217,6 +272,380 @@ fn normalize_programs(programs: Vec<String>) -> Vec<String> {
     }
 
     cleaned
+}
+
+fn normalize_columns(columns: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
+
+    for column in columns {
+        let trimmed = column.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let key = trimmed.to_lowercase();
+        if seen.insert(key) {
+            cleaned.push(trimmed.to_string());
+        }
+    }
+
+    cleaned
+}
+
+fn read_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if matches!(extension.as_str(), "xlsx" | "xlsm" | "xls" | "xlsb") {
+        read_excel_spreadsheet(path)
+    } else {
+        read_delimited_spreadsheet(path)
+    }
+}
+
+fn read_delimited_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    let delimiter = detect_delimiter(path)?;
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(true)
+        .flexible(true)
+        .from_path(path)
+        .map_err(|err| format!("Unable to open the spreadsheet: {err}"))?;
+
+    let mut headers: Vec<String> = reader
+        .headers()
+        .map_err(|err| format!("Unable to read spreadsheet headers: {err}"))?
+        .iter()
+        .map(|value| value.trim().to_string())
+        .collect();
+
+    let mut rows = Vec::new();
+    for record in reader.records() {
+        let record = record.map_err(|err| format!("Unable to read spreadsheet rows: {err}"))?;
+        let mut values: Vec<String> = record
+            .iter()
+            .map(|value| value.trim().to_string())
+            .collect();
+        if values.iter().all(|value| value.is_empty()) {
+            continue;
+        }
+        rows.push(values);
+        if rows.len() >= 10 {
+            break;
+        }
+    }
+
+    align_row_lengths(&mut headers, &mut rows);
+    Ok((headers, rows))
+}
+
+fn read_excel_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    let mut workbook =
+        open_workbook_auto(path).map_err(|err| format!("Unable to open the spreadsheet: {err}"))?;
+
+    let sheet_name = workbook
+        .sheet_names()
+        .get(0)
+        .cloned()
+        .ok_or_else(|| "The workbook does not contain any worksheets.".to_string())?;
+
+    let range = workbook
+        .worksheet_range(&sheet_name)
+        .ok_or_else(|| format!("Unable to read the worksheet named '{sheet_name}'."))?
+        .map_err(|err| format!("Unable to read the worksheet data: {err}"))?;
+
+    let mut rows_iter = range.rows();
+    let header_row = rows_iter
+        .next()
+        .ok_or_else(|| "The worksheet is empty.".to_string())?;
+
+    let mut headers: Vec<String> = header_row.iter().map(cell_to_string).collect();
+    let mut rows = Vec::new();
+
+    for row in rows_iter {
+        let mut values: Vec<String> = row.iter().map(cell_to_string).collect();
+        if values.iter().all(|value| value.is_empty()) {
+            continue;
+        }
+        rows.push(values);
+        if rows.len() >= 10 {
+            break;
+        }
+    }
+
+    align_row_lengths(&mut headers, &mut rows);
+    Ok((headers, rows))
+}
+
+fn cell_to_string(cell: &DataType) -> String {
+    match cell {
+        DataType::Empty => String::new(),
+        _ => cell.to_string().trim().to_string(),
+    }
+}
+
+fn align_row_lengths(headers: &mut Vec<String>, rows: &mut Vec<Vec<String>>) {
+    let mut column_count = headers.len();
+    for row in rows.iter() {
+        if row.len() > column_count {
+            column_count = row.len();
+        }
+    }
+
+    if headers.len() < column_count {
+        headers.resize(column_count, String::new());
+    }
+
+    for row in rows.iter_mut() {
+        if row.len() < column_count {
+            row.resize(column_count, String::new());
+        } else if row.len() > column_count {
+            row.truncate(column_count);
+        }
+    }
+}
+
+fn detect_delimiter(path: &Path) -> Result<u8, String> {
+    let file = File::open(path).map_err(|err| format!("Unable to open the spreadsheet: {err}"))?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = String::new();
+
+    for _ in 0..5 {
+        buffer.clear();
+        let bytes_read = reader
+            .read_line(&mut buffer)
+            .map_err(|err| format!("Unable to inspect the spreadsheet: {err}"))?;
+        if bytes_read == 0 {
+            break;
+        }
+        if buffer.trim().is_empty() {
+            continue;
+        }
+
+        let counts = [
+            (b'\t', buffer.matches('\t').count()),
+            (b',', buffer.matches(',').count()),
+            (b';', buffer.matches(';').count()),
+        ];
+
+        if let Some((delimiter, count)) = counts.iter().max_by_key(|(_, count)| *count) {
+            if *count > 0 {
+                return Ok(*delimiter);
+            }
+        }
+    }
+
+    Ok(b'\t')
+}
+
+fn suggest_spreadsheet_columns(
+    headers: &[String],
+    rows: &[Vec<String>],
+) -> (Vec<usize>, Vec<usize>) {
+    const PROMPT_KEYWORDS: &[&str] = &[
+        "prompt",
+        "interest",
+        "research",
+        "description",
+        "summary",
+        "essay",
+        "statement",
+        "focus",
+        "topic",
+        "goal",
+    ];
+    const IDENTIFIER_KEYWORDS: &[&str] = &[
+        "id",
+        "identifier",
+        "name",
+        "first",
+        "last",
+        "student",
+        "email",
+        "netid",
+        "number",
+        "uid",
+    ];
+
+    let mut prompt_columns = Vec::new();
+    let mut identifier_columns = Vec::new();
+
+    for (index, header) in headers.iter().enumerate() {
+        let header_lower = header.to_lowercase();
+        if header_lower.is_empty() {
+            continue;
+        }
+
+        if PROMPT_KEYWORDS
+            .iter()
+            .any(|keyword| header_lower.contains(keyword))
+        {
+            prompt_columns.push(index);
+        }
+
+        if IDENTIFIER_KEYWORDS
+            .iter()
+            .any(|keyword| header_lower.contains(keyword))
+        {
+            identifier_columns.push(index);
+        }
+    }
+
+    sort_and_dedup(&mut prompt_columns);
+    sort_and_dedup(&mut identifier_columns);
+
+    let stats = compute_column_stats(headers, rows);
+
+    if prompt_columns.is_empty() {
+        let mut candidates: Vec<&ColumnStats> = stats
+            .iter()
+            .filter(|stat| stat.non_empty > 0 && stat.numeric_ratio < 0.6)
+            .collect();
+
+        candidates.sort_by(|a, b| {
+            b.average_length
+                .partial_cmp(&a.average_length)
+                .unwrap_or(Ordering::Equal)
+                .then(b.max_length.cmp(&a.max_length))
+        });
+
+        let mut fallback = Vec::new();
+        for stat in &candidates {
+            if stat.average_length >= 18.0 || stat.max_length >= 60 {
+                fallback.push(stat.index);
+            }
+        }
+
+        if fallback.is_empty() {
+            if let Some(best) = candidates.first() {
+                fallback.push(best.index);
+            }
+        }
+
+        prompt_columns = fallback;
+    }
+
+    if identifier_columns.is_empty() {
+        let mut candidates: Vec<&ColumnStats> =
+            stats.iter().filter(|stat| stat.non_empty > 0).collect();
+
+        candidates.sort_by(|a, b| {
+            a.average_length
+                .partial_cmp(&b.average_length)
+                .unwrap_or(Ordering::Equal)
+                .then(b.non_empty.cmp(&a.non_empty))
+        });
+
+        let mut fallback = Vec::new();
+        for stat in &candidates {
+            if stat.average_length <= 36.0 || stat.numeric_ratio >= 0.5 {
+                fallback.push(stat.index);
+            }
+            if fallback.len() >= 3 {
+                break;
+            }
+        }
+
+        if fallback.is_empty() {
+            if let Some(best) = candidates.first() {
+                fallback.push(best.index);
+            }
+        }
+
+        identifier_columns = fallback;
+    }
+
+    if prompt_columns.is_empty() && !headers.is_empty() {
+        prompt_columns.push(headers.len() - 1);
+    }
+
+    if identifier_columns.is_empty() && !headers.is_empty() {
+        identifier_columns.push(0);
+    }
+
+    sort_and_dedup(&mut prompt_columns);
+    sort_and_dedup(&mut identifier_columns);
+
+    (prompt_columns, identifier_columns)
+}
+
+fn sort_and_dedup(values: &mut Vec<usize>) {
+    values.sort_unstable();
+    values.dedup();
+}
+
+struct ColumnStats {
+    index: usize,
+    non_empty: usize,
+    average_length: f64,
+    max_length: usize,
+    numeric_ratio: f64,
+}
+
+fn compute_column_stats(headers: &[String], rows: &[Vec<String>]) -> Vec<ColumnStats> {
+    let column_count = headers.len();
+    let mut stats = Vec::new();
+
+    for index in 0..column_count {
+        let mut non_empty = 0usize;
+        let mut total_length = 0usize;
+        let mut max_length = 0usize;
+        let mut numeric_like = 0usize;
+
+        for row in rows {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                non_empty += 1;
+                let length = trimmed.chars().count();
+                total_length += length;
+                if length > max_length {
+                    max_length = length;
+                }
+                if is_numeric_like(trimmed) {
+                    numeric_like += 1;
+                }
+            }
+        }
+
+        let average_length = if non_empty > 0 {
+            total_length as f64 / non_empty as f64
+        } else {
+            0.0
+        };
+
+        let numeric_ratio = if non_empty > 0 {
+            numeric_like as f64 / non_empty as f64
+        } else {
+            0.0
+        };
+
+        stats.push(ColumnStats {
+            index,
+            non_empty,
+            average_length,
+            max_length,
+            numeric_ratio,
+        });
+    }
+
+    stats
+}
+
+fn is_numeric_like(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let has_alpha = trimmed.chars().any(|c| c.is_ascii_alphabetic());
+    !has_alpha
 }
 
 fn resolve_existing_path(
@@ -357,7 +786,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             submit_matching_request,
-            update_faculty_embeddings
+            update_faculty_embeddings,
+            analyze_spreadsheet
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
