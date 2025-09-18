@@ -298,7 +298,7 @@ function App() {
                         filters: [
                           {
                             name: "Spreadsheets",
-                            extensions: ["tsv", "xlsx", "xls"],
+                            extensions: ["tsv", "txt", "xlsx", "xls"],
                           },
                         ],
                       })
@@ -319,7 +319,7 @@ function App() {
                 <p className="small-note">
                   Each row should include an identifier column (for example,
                   name or ID) and a column containing the student's prompt.
-                  TSV or Excel formats are supported.
+                  Tab-delimited TSV/TXT or Excel formats are supported.
                 </p>
               </div>
             )}
@@ -427,7 +427,7 @@ function App() {
                         filters: [
                           {
                             name: "Faculty rosters",
-                            extensions: ["tsv", "xlsx", "xls"],
+                            extensions: ["tsv", "txt", "xlsx", "xls"],
                           },
                         ],
                       })
@@ -446,8 +446,8 @@ function App() {
                   <div className="path-preview">{customFacultyPath}</div>
                 )}
                 <p className="small-note">
-                  Upload a TSV or Excel file listing the available faculty
-                  members.
+                  Upload a tab-delimited TSV/TXT or Excel file listing the
+                  available faculty members.
                 </p>
               </div>
             )}

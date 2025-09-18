@@ -124,7 +124,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         TaskType::Spreadsheet => {
             let spreadsheet = resolve_existing_path(spreadsheet_path, false, "Spreadsheet file")?;
             if let Some(message) =
-                validate_extension(&spreadsheet, &["tsv", "xlsx", "xls"], "spreadsheet")
+                validate_extension(&spreadsheet, &["tsv", "txt", "xlsx", "xls"], "spreadsheet")
             {
                 warnings.push(message);
             }
@@ -146,7 +146,8 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
 
     if matches!(faculty_scope, FacultyScope::Custom) {
         let roster = resolve_existing_path(custom_faculty_path, false, "Faculty list")?;
-        if let Some(message) = validate_extension(&roster, &["tsv", "xlsx", "xls"], "faculty list")
+        if let Some(message) =
+            validate_extension(&roster, &["tsv", "txt", "xlsx", "xls"], "faculty list")
         {
             warnings.push(message);
         }
