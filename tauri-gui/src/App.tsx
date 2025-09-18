@@ -23,8 +23,6 @@ const PROGRAM_OPTIONS = [
 
 type ProgramName = (typeof PROGRAM_OPTIONS)[number];
 
-const MAX_PROGRAM_SELECTIONS = 4;
-
 interface PathConfirmation {
   label: string;
   path: string;
@@ -72,9 +70,6 @@ function App() {
   const [isUpdatingEmbeddings, setIsUpdatingEmbeddings] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
 
-  const selectionLimitReached =
-    selectedPrograms.length >= MAX_PROGRAM_SELECTIONS;
-
   const handleTaskTypeChange = (value: TaskType) => {
     setTaskType(value);
     setError(null);
@@ -99,10 +94,6 @@ function App() {
     setSelectedPrograms((current) => {
       if (current.includes(program)) {
         return current.filter((entry) => entry !== program);
-      }
-
-      if (current.length >= MAX_PROGRAM_SELECTIONS) {
-        return current;
       }
 
       return [...current, program];
@@ -441,20 +432,13 @@ function App() {
                 <div className="program-checkbox-grid">
                   {PROGRAM_OPTIONS.map((program) => {
                     const isSelected = selectedPrograms.includes(program);
-                    const isDisabled = selectionLimitReached && !isSelected;
 
                     return (
-                      <label
-                        key={program}
-                        className={`checkbox-option${
-                          isDisabled ? " disabled" : ""
-                        }`}
-                      >
+                      <label key={program} className="checkbox-option">
                         <input
                           type="checkbox"
                           value={program}
                           checked={isSelected}
-                          disabled={isDisabled}
                           onChange={() => toggleProgramSelection(program)}
                         />
                         <span>{program}</span>
@@ -464,7 +448,7 @@ function App() {
                 </div>
                 <p className="small-note">
                   Select the programs that should be included in the faculty
-                  roster. Up to four programs per faculty member are supported.
+                  roster.
                 </p>
               </div>
             )}
