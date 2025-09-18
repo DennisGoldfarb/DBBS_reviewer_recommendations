@@ -7,17 +7,17 @@ type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
 type FacultyScope = "all" | "program" | "custom";
 
 const PROGRAM_OPTIONS = [
-  "Biomedical Informatics and Data Science",
-  "Developmental, Regenerative and Stem Cell Biology",
   "Biochemistry, Biophysics, and Structural Biology",
-  "Molecular Genetics and Genomics",
-  "Neurosciences",
-  "Molecular Cell Biology",
+  "Biomedical Informatics and Data Science",
+  "Cancer Biology",
+  "Computational and Systems Biology",
+  "Developmental, Regenerative and Stem Cell Biology",
   "Evolution, Ecology and Population Biology",
   "Immunology",
+  "Molecular Cell Biology",
+  "Molecular Genetics and Genomics",
   "Molecular Microbiology and Microbial Pathogenesis",
-  "Computational and Systems Biology",
-  "Cancer Biology",
+  "Neurosciences",
   "Plant & Microbial Biosciences",
 ] as const;
 
