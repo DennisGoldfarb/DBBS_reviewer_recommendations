@@ -6,6 +6,23 @@ import "./App.css";
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
 type FacultyScope = "all" | "program" | "custom";
 
+const PROGRAM_OPTIONS = [
+  "Biochemistry, Biophysics, and Structural Biology",
+  "Biomedical Informatics and Data Science",
+  "Cancer Biology",
+  "Computational and Systems Biology",
+  "Developmental, Regenerative and Stem Cell Biology",
+  "Evolution, Ecology and Population Biology",
+  "Immunology",
+  "Molecular Cell Biology",
+  "Molecular Genetics and Genomics",
+  "Molecular Microbiology and Microbial Pathogenesis",
+  "Neurosciences",
+  "Plant & Microbial Biosciences",
+] as const;
+
+type ProgramName = (typeof PROGRAM_OPTIONS)[number];
+
 interface PathConfirmation {
   label: string;
   path: string;
@@ -34,12 +51,6 @@ interface StatusMessage {
   message: string;
 }
 
-const parsePrograms = (raw: string): string[] =>
-  raw
-    .split(/[\n,]/)
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
 function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
@@ -47,7 +58,7 @@ function App() {
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
-  const [programInput, setProgramInput] = useState("");
+  const [selectedPrograms, setSelectedPrograms] = useState<ProgramName[]>([]);
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
   const [studentRecCount, setStudentRecCount] = useState("0");
@@ -73,6 +84,22 @@ function App() {
     if (value !== "custom") {
       setCustomFacultyPath("");
     }
+
+    if (value !== "program") {
+      setSelectedPrograms([]);
+    }
+  };
+
+  const toggleProgramSelection = (program: ProgramName) => {
+    setSelectedPrograms((current) => {
+      if (current.includes(program)) {
+        return current.filter((entry) => entry !== program);
+      }
+
+      return [...current, program];
+    });
+    setError(null);
+    setResult(null);
   };
 
   const handleFileSelection = async (
@@ -99,7 +126,7 @@ function App() {
     setError(null);
     setResult(null);
 
-    const programFilters = parsePrograms(programInput);
+    const programFilters = selectedPrograms;
     const facultyRecommendations = Math.max(
       1,
       Number.parseInt(facultyRecCount, 10) || 0,
@@ -176,7 +203,7 @@ function App() {
     <div className="app-shell">
       <main>
         <header className="page-header">
-          <h1>Reviewer Recommendation Console</h1>
+          <h1>DBBS Faculty Recommendation Console</h1>
           <p className="description">
             Configure matching runs, narrow the faculty roster, and track the
             options that will be sent to the matching backend.
@@ -236,10 +263,11 @@ function App() {
             </div>
 
             {taskType === "prompt" && (
-              <div className="input-stack">
+              <div className="input-stack narrow-column">
                 <label htmlFor="prompt-text">Prompt text</label>
                 <textarea
                   id="prompt-text"
+                  className="prompt-textarea"
                   value={promptText}
                   onChange={(event) => setPromptText(event.target.value)}
                   placeholder="Describe the student's research interests..."
@@ -399,17 +427,28 @@ function App() {
             </div>
 
             {facultyScope === "program" && (
-              <div className="input-stack">
-                <label htmlFor="programs">Programs or tracks</label>
-                <textarea
-                  id="programs"
-                  value={programInput}
-                  onChange={(event) => setProgramInput(event.target.value)}
-                  placeholder="One program per line, or separate entries with commas"
-                />
+              <div className="input-stack narrow-column">
+                <span className="input-heading">Programs or tracks</span>
+                <div className="program-checkbox-grid">
+                  {PROGRAM_OPTIONS.map((program) => {
+                    const isSelected = selectedPrograms.includes(program);
+
+                    return (
+                      <label key={program} className="checkbox-option">
+                        <input
+                          type="checkbox"
+                          value={program}
+                          checked={isSelected}
+                          onChange={() => toggleProgramSelection(program)}
+                        />
+                        <span>{program}</span>
+                      </label>
+                    );
+                  })}
+                </div>
                 <p className="small-note">
-                  You can specify up to four programs per faculty member.
-                  Duplicate names are removed automatically.
+                  Select the programs that should be included in the faculty
+                  roster.
                 </p>
               </div>
             )}
