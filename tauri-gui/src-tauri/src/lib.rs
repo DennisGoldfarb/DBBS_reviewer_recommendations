@@ -1,11 +1,16 @@
 use calamine::{open_workbook_auto, DataType, Reader};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+const FACULTY_DATASET_FILENAME: &str = "faculty_dataset.tsv";
+const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +102,21 @@ struct SpreadsheetPreview {
     rows: Vec<Vec<String>>,
     suggested_prompt_columns: Vec<usize>,
     suggested_identifier_columns: Vec<usize>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyDatasetStatus {
+    path: Option<String>,
+    canonical_path: Option<String>,
+    last_modified: Option<String>,
+    row_count: Option<usize>,
+    column_count: Option<usize>,
+    is_valid: bool,
+    is_default: bool,
+    message: Option<String>,
+    message_variant: Option<String>,
+    preview: Option<SpreadsheetPreview>,
 }
 
 #[tauri::command]
@@ -234,6 +254,74 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
 #[tauri::command]
 fn update_faculty_embeddings() -> Result<String, String> {
     Ok("Faculty embeddings update request received. The backend stub only confirms availability in this build.".into())
+}
+
+#[tauri::command]
+fn get_faculty_dataset_status(
+    app_handle: tauri::AppHandle,
+) -> Result<FacultyDatasetStatus, String> {
+    build_faculty_dataset_status(&app_handle)
+}
+
+#[tauri::command]
+fn replace_faculty_dataset(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<FacultyDatasetStatus, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a TSV file to import for the faculty dataset.".into());
+    }
+
+    let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty dataset TSV")?;
+
+    match source.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("tsv") => {}
+        _ => return Err("Select a tab-delimited .tsv file to replace the faculty dataset.".into()),
+    }
+
+    let destination = dataset_destination(&app_handle)?;
+    ensure_dataset_directory(&destination)?;
+    fs::copy(&source, &destination)
+        .map_err(|err| format!("Unable to replace the faculty dataset: {err}"))?;
+
+    let mut status = build_faculty_dataset_status(&app_handle)?;
+    if status.message.is_none() {
+        status.message = Some("Faculty dataset replaced successfully.".into());
+        status.message_variant = Some("success".into());
+    } else if status.message_variant.is_none() {
+        status.message_variant = Some(if status.is_valid {
+            "success".into()
+        } else {
+            "error".into()
+        });
+    }
+
+    Ok(status)
+}
+
+#[tauri::command]
+fn restore_default_faculty_dataset(
+    app_handle: tauri::AppHandle,
+) -> Result<FacultyDatasetStatus, String> {
+    let destination = dataset_destination(&app_handle)?;
+    ensure_dataset_directory(&destination)?;
+    fs::write(&destination, DEFAULT_FACULTY_DATASET)
+        .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
+
+    let mut status = build_faculty_dataset_status(&app_handle)?;
+    if status.message.is_none() {
+        status.message = Some("Faculty dataset reset to the packaged default.".into());
+        status.message_variant = Some("success".into());
+    } else if status.message_variant.is_none() {
+        status.message_variant = Some(if status.is_valid {
+            "success".into()
+        } else {
+            "error".into()
+        });
+    }
+
+    Ok(status)
 }
 
 #[tauri::command]
@@ -440,6 +528,134 @@ fn detect_delimiter(path: &Path) -> Result<u8, String> {
     }
 
     Ok(b'\t')
+}
+
+fn build_faculty_dataset_status(
+    app_handle: &tauri::AppHandle,
+) -> Result<FacultyDatasetStatus, String> {
+    let dataset_path = dataset_destination(app_handle)?;
+    let mut status = FacultyDatasetStatus {
+        path: Some(dataset_path.to_string_lossy().into_owned()),
+        canonical_path: None,
+        last_modified: None,
+        row_count: None,
+        column_count: None,
+        is_valid: false,
+        is_default: false,
+        message: None,
+        message_variant: None,
+        preview: None,
+    };
+
+    if !dataset_path.exists() {
+        status.message = Some(
+            "No faculty dataset has been configured. Restore the default file to continue.".into(),
+        );
+        status.message_variant = Some("info".into());
+        return Ok(status);
+    }
+
+    status.canonical_path = dataset_path
+        .canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+
+    let metadata = fs::metadata(&dataset_path)
+        .map_err(|err| format!("Unable to inspect the faculty dataset: {err}"))?;
+    status.last_modified = metadata.modified().ok().map(format_system_time);
+
+    let bytes = fs::read(&dataset_path)
+        .map_err(|err| format!("Unable to read the faculty dataset: {err}"))?;
+    status.is_default = bytes == DEFAULT_FACULTY_DATASET;
+
+    match compute_tsv_dimensions(&bytes) {
+        Ok((rows, columns)) => {
+            status.row_count = Some(rows);
+            status.column_count = Some(columns);
+            status.is_valid = rows > 0 && columns > 0;
+            if !status.is_valid {
+                status.message = Some("The faculty dataset does not contain any data rows.".into());
+                status.message_variant = Some("error".into());
+            }
+        }
+        Err(err) => {
+            status.message = Some(err);
+            status.message_variant = Some("error".into());
+        }
+    }
+
+    match build_dataset_preview(&dataset_path) {
+        Ok(preview) => {
+            status.preview = Some(preview);
+        }
+        Err(err) => {
+            if status.message.is_none() {
+                status.message = Some(err);
+                status.message_variant = Some("error".into());
+            }
+        }
+    }
+
+    Ok(status)
+}
+
+fn dataset_destination(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Unable to resolve the application data directory: {err}"))?
+        .ok_or_else(|| "The application data directory is not available.".to_string())?;
+    Ok(base.join(FACULTY_DATASET_FILENAME))
+}
+
+fn ensure_dataset_directory(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("Unable to prepare the faculty dataset directory: {err}"))?;
+    }
+    Ok(())
+}
+
+fn compute_tsv_dimensions(data: &[u8]) -> Result<(usize, usize), String> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .flexible(true)
+        .from_reader(Cursor::new(data));
+
+    let headers = reader
+        .headers()
+        .map_err(|err| format!("Unable to read the faculty dataset headers: {err}"))?
+        .clone();
+
+    let mut row_count = 0usize;
+    for record in reader.records() {
+        let record =
+            record.map_err(|err| format!("Unable to read the faculty dataset rows: {err}"))?;
+        if record.iter().any(|value| !value.trim().is_empty()) {
+            row_count += 1;
+        }
+    }
+
+    Ok((row_count, headers.len()))
+}
+
+fn build_dataset_preview(path: &Path) -> Result<SpreadsheetPreview, String> {
+    let (mut headers, mut rows) = read_delimited_spreadsheet(path)?;
+    align_row_lengths(&mut headers, &mut rows);
+    let (prompt_columns, identifier_columns) = suggest_spreadsheet_columns(&headers, &rows);
+
+    Ok(SpreadsheetPreview {
+        headers,
+        rows,
+        suggested_prompt_columns: prompt_columns,
+        suggested_identifier_columns: identifier_columns,
+    })
+}
+
+fn format_system_time(time: SystemTime) -> String {
+    let datetime: DateTime<Utc> = time.into();
+    datetime.to_rfc3339()
 }
 
 fn suggest_spreadsheet_columns(
@@ -787,7 +1003,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             submit_matching_request,
             update_faculty_embeddings,
-            analyze_spreadsheet
+            analyze_spreadsheet,
+            get_faculty_dataset_status,
+            replace_faculty_dataset,
+            restore_default_faculty_dataset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

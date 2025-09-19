@@ -175,6 +175,13 @@ button.secondary {
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.25);
 }
 
+button.ghost {
+  background: transparent;
+  color: #1d4ed8;
+  border: 1px solid #93c5fd;
+  box-shadow: none;
+}
+
 button.add-entry-button {
   align-self: flex-start;
   background: #0ea5e9;
@@ -355,6 +362,164 @@ button.add-entry-button:not(:disabled):hover {
 
 .number-row input[type="number"] {
   width: 140px;
+}
+
+.dataset-card {
+  margin-top: 1.75rem;
+  padding: 1.4rem 1.6rem;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.1);
+}
+
+.dataset-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.dataset-card-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.dataset-card-description {
+  margin-top: 0.35rem;
+  margin-bottom: 1.15rem;
+  color: #475569;
+}
+
+.dataset-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.dataset-status-pill.ready {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.dataset-status-pill.warning {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.dataset-status-pill.loading {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.dataset-meta-grid {
+  margin: 0;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.dataset-meta-grid dt {
+  margin: 0;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.dataset-meta-grid dd {
+  margin: 0.35rem 0 0;
+  color: #334155;
+  word-break: break-word;
+}
+
+.dataset-path {
+  font-family: "ui-monospace", SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+}
+
+.dataset-message {
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+
+.dataset-message-info {
+  background: #e0f2fe;
+  color: #075985;
+  border: 1px solid #7dd3fc;
+}
+
+.dataset-message-error {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+.dataset-actions {
+  margin-top: 1.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.dataset-status-banner {
+  margin-top: 1.25rem;
+}
+
+.dataset-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 40;
+}
+
+.dataset-preview-dialog {
+  max-width: 860px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 30px 60px rgba(15, 23, 42, 0.3);
+  padding: 1.5rem;
+  border: 1px solid #e2e8f0;
+}
+
+.dataset-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.dataset-preview-header h3 {
+  margin: 0;
+}
+
+.dataset-preview-card {
+  gap: 0.75rem;
+}
+
+.dataset-preview-card .preview-table-wrapper {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.dataset-preview-card .small-note {
+  color: #475569;
+}
+
+.close-button {
+  padding: 0.5rem 1rem;
 }
 
 .program-checkbox-grid {
@@ -685,5 +850,70 @@ button.add-entry-button:not(:disabled):hover {
 
   button.secondary {
     background: #1d4ed8;
+  }
+
+  button.ghost {
+    color: #93c5fd;
+    border-color: #1d4ed8;
+  }
+
+  .dataset-card {
+    background: #0f172a;
+    border-color: #1f2937;
+    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.65);
+  }
+
+  .dataset-card-description {
+    color: #cbd5f5;
+  }
+
+  .dataset-meta-grid dt {
+    color: #e2e8f0;
+  }
+
+  .dataset-meta-grid dd {
+    color: #cbd5f5;
+  }
+
+  .dataset-status-pill.ready {
+    background: rgba(22, 101, 52, 0.25);
+    color: #bbf7d0;
+  }
+
+  .dataset-status-pill.warning {
+    background: rgba(185, 28, 28, 0.2);
+    color: #fecaca;
+  }
+
+  .dataset-status-pill.loading {
+    background: rgba(3, 105, 161, 0.2);
+    color: #bae6fd;
+  }
+
+  .dataset-message-info {
+    background: rgba(14, 165, 233, 0.18);
+    border-color: rgba(56, 189, 248, 0.35);
+    color: #bae6fd;
+  }
+
+  .dataset-message-error {
+    background: rgba(220, 38, 38, 0.22);
+    border-color: rgba(248, 113, 113, 0.35);
+    color: #fecaca;
+  }
+
+  .dataset-preview-dialog {
+    background: #0f172a;
+    border-color: #1f2937;
+    box-shadow: 0 30px 70px rgba(2, 6, 23, 0.7);
+  }
+
+  .dataset-preview-card {
+    background: #111827;
+    border-color: #1f2937;
+  }
+
+  .dataset-preview-card .small-note {
+    color: #cbd5f5;
   }
 }

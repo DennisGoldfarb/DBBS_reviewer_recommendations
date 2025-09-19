@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
@@ -33,6 +33,19 @@ interface SpreadsheetPreview {
   rows: string[][];
   suggestedPromptColumns: number[];
   suggestedIdentifierColumns: number[];
+}
+
+interface FacultyDatasetStatus {
+  path: string | null;
+  canonicalPath: string | null;
+  lastModified: string | null;
+  rowCount: number | null;
+  columnCount: number | null;
+  isValid: boolean;
+  isDefault: boolean;
+  message: string | null;
+  messageVariant: StatusMessage["variant"] | null;
+  preview: SpreadsheetPreview | null;
 }
 
 interface SubmissionDetails {
@@ -91,6 +104,180 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUpdatingEmbeddings, setIsUpdatingEmbeddings] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
+  const [datasetStatus, setDatasetStatus] =
+    useState<FacultyDatasetStatus | null>(null);
+  const [isDatasetLoading, setIsDatasetLoading] = useState(true);
+  const [isDatasetBusy, setIsDatasetBusy] = useState(false);
+  const [datasetBanner, setDatasetBanner] = useState<StatusMessage | null>(null);
+  const [isDatasetPreviewOpen, setIsDatasetPreviewOpen] = useState(false);
+
+  const applyDatasetStatus = useCallback(
+    (
+      status: FacultyDatasetStatus,
+      fallbackVariant?: StatusMessage["variant"],
+    ) => {
+      setDatasetStatus(status);
+      if (status.message) {
+        const variant = status.messageVariant ?? fallbackVariant;
+        if (variant === "success" || variant === "error") {
+          setDatasetBanner({ variant, message: status.message });
+        } else {
+          setDatasetBanner(null);
+        }
+      } else {
+        setDatasetBanner(null);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      try {
+        const status = await invoke<FacultyDatasetStatus>(
+          "get_faculty_dataset_status",
+        );
+        applyDatasetStatus(status);
+      } catch (statusError) {
+        const message =
+          statusError instanceof Error
+            ? statusError.message
+            : String(statusError);
+        setDatasetStatus(null);
+        setDatasetBanner({
+          variant: "error",
+          message: `Unable to load the faculty dataset status: ${message}`,
+        });
+      } finally {
+        setIsDatasetLoading(false);
+      }
+    };
+
+    loadStatus();
+  }, [applyDatasetStatus]);
+
+  const runEmbeddingRefresh = useCallback(
+    async (statusForValidation: FacultyDatasetStatus | null) => {
+      const currentStatus = statusForValidation ?? datasetStatus;
+      if (!currentStatus || !currentStatus.isValid) {
+        const message =
+          currentStatus?.message ??
+          "Provide a valid faculty dataset before refreshing embeddings.";
+        setEmbeddingStatus({ variant: "error", message });
+        return;
+      }
+
+      setIsUpdatingEmbeddings(true);
+      setEmbeddingStatus(null);
+
+      try {
+        const message = await invoke<string>("update_faculty_embeddings");
+        setEmbeddingStatus({ variant: "success", message });
+      } catch (updateError) {
+        const message =
+          updateError instanceof Error
+            ? updateError.message
+            : String(updateError);
+        setEmbeddingStatus({ variant: "error", message });
+      } finally {
+        setIsUpdatingEmbeddings(false);
+      }
+    },
+    [datasetStatus],
+  );
+
+  const selectDatasetFile = async () => {
+    try {
+      const selection = await open({
+        multiple: false,
+        filters: [
+          {
+            name: "Faculty dataset",
+            extensions: ["tsv"],
+          },
+        ],
+      });
+
+      if (typeof selection === "string") {
+        return selection;
+      }
+      return null;
+    } catch (selectionError) {
+      const message =
+        selectionError instanceof Error
+          ? selectionError.message
+          : String(selectionError);
+      setDatasetBanner({
+        variant: "error",
+        message: `Unable to open a file dialog: ${message}`,
+      });
+      return null;
+    }
+  };
+
+  const handleDatasetReplacement = async () => {
+    setDatasetBanner(null);
+    const selection = await selectDatasetFile();
+    if (!selection) {
+      return;
+    }
+
+    setIsDatasetBusy(true);
+    try {
+      const status = await invoke<FacultyDatasetStatus>(
+        "replace_faculty_dataset",
+        { path: selection },
+      );
+      applyDatasetStatus(status, "success");
+      if (status.isValid) {
+        await runEmbeddingRefresh(status);
+      }
+    } catch (replacementError) {
+      const message =
+        replacementError instanceof Error
+          ? replacementError.message
+          : String(replacementError);
+      setDatasetBanner({
+        variant: "error",
+        message: `Unable to replace the faculty dataset: ${message}`,
+      });
+    } finally {
+      setIsDatasetBusy(false);
+    }
+  };
+
+  const handleDatasetRestore = async () => {
+    setDatasetBanner(null);
+    setIsDatasetBusy(true);
+    try {
+      const status = await invoke<FacultyDatasetStatus>(
+        "restore_default_faculty_dataset",
+      );
+      applyDatasetStatus(status, "success");
+    } catch (restoreError) {
+      const message =
+        restoreError instanceof Error
+          ? restoreError.message
+          : String(restoreError);
+      setDatasetBanner({
+        variant: "error",
+        message: `Unable to restore the packaged dataset: ${message}`,
+      });
+    } finally {
+      setIsDatasetBusy(false);
+    }
+  };
+
+  const formatDatasetTimestamp = (value: string | null) => {
+    if (!value) {
+      return "Not available";
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+    return parsed.toLocaleString();
+  };
 
   const resetSpreadsheetConfiguration = () => {
     setSpreadsheetPreview(null);
@@ -370,19 +557,7 @@ function App() {
   };
 
   const handleEmbeddingsUpdate = async () => {
-    setIsUpdatingEmbeddings(true);
-    setEmbeddingStatus(null);
-
-    try {
-      const message = await invoke<string>("update_faculty_embeddings");
-      setEmbeddingStatus({ variant: "success", message });
-    } catch (updateError) {
-      const message =
-        updateError instanceof Error ? updateError.message : String(updateError);
-      setEmbeddingStatus({ variant: "error", message });
-    } finally {
-      setIsUpdatingEmbeddings(false);
-    }
+    await runEmbeddingRefresh(datasetStatus);
   };
 
   return (
@@ -813,6 +988,137 @@ function App() {
             </div>
           </fieldset>
 
+          <section className="dataset-card">
+            <div className="dataset-card-header">
+              <h2>Faculty dataset</h2>
+              <span
+                className={`dataset-status-pill ${
+                  isDatasetLoading
+                    ? "loading"
+                    : datasetStatus?.isValid
+                      ? "ready"
+                      : "warning"
+                }`}
+              >
+                {isDatasetLoading
+                  ? "Loading…"
+                  : datasetStatus?.isValid
+                    ? "Ready"
+                    : "Action required"}
+              </span>
+            </div>
+            <p className="dataset-card-description">
+              Manage the TSV that seeds the faculty embedding index before
+              running updates.
+            </p>
+            <dl className="dataset-meta-grid">
+              <div>
+                <dt>Active file</dt>
+                <dd className="dataset-path">
+                  {isDatasetLoading
+                    ? "Loading…"
+                    : datasetStatus?.canonicalPath ??
+                      datasetStatus?.path ??
+                      "Not configured"}
+                </dd>
+              </div>
+              <div>
+                <dt>Last updated</dt>
+                <dd>
+                  {isDatasetLoading
+                    ? "Loading…"
+                    : formatDatasetTimestamp(datasetStatus?.lastModified ?? null)}
+                </dd>
+              </div>
+              <div>
+                <dt>Rows × columns</dt>
+                <dd>
+                  {isDatasetLoading
+                    ? "Loading…"
+                    : datasetStatus?.rowCount != null &&
+                        datasetStatus.columnCount != null
+                      ? `${datasetStatus.rowCount} × ${datasetStatus.columnCount}`
+                      : "Unavailable"}
+                </dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>
+                  {isDatasetLoading
+                    ? "Loading…"
+                    : datasetStatus
+                      ? datasetStatus.isDefault
+                        ? "Packaged default"
+                        : "Custom upload"
+                      : "Not configured"}
+                </dd>
+              </div>
+            </dl>
+            {datasetStatus?.message &&
+              (datasetStatus.messageVariant ??
+                (datasetStatus.isValid ? "success" : "error")) !==
+                "success" && (
+              <p
+                className={`dataset-message ${
+                  (datasetStatus.messageVariant ??
+                    (datasetStatus.isValid ? "success" : "error")) ===
+                  "success"
+                    ? "dataset-message-success"
+                    : (datasetStatus.messageVariant ??
+                        (datasetStatus.isValid ? "success" : "error")) ===
+                        "error"
+                      ? "dataset-message-error"
+                      : "dataset-message-info"
+                }`}
+              >
+                {datasetStatus.message}
+              </p>
+            )}
+            <div className="dataset-actions">
+              <button
+                type="button"
+                onClick={handleDatasetReplacement}
+                disabled={isDatasetBusy || isDatasetLoading}
+              >
+                Replace dataset
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleDatasetRestore}
+                disabled={isDatasetBusy || isDatasetLoading}
+              >
+                Restore default
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setIsDatasetPreviewOpen(true)}
+                disabled={
+                  isDatasetBusy ||
+                  isDatasetLoading ||
+                  !datasetStatus?.preview
+                }
+              >
+                Preview dataset
+              </button>
+            </div>
+          </section>
+
+          {datasetBanner && (
+            <div
+              className={`status-banner ${
+                datasetBanner.variant === "success"
+                  ? "status-success"
+                  : datasetBanner.variant === "error"
+                    ? "status-error"
+                    : "status-info"
+              } dataset-status-banner`}
+            >
+              {datasetBanner.message}
+            </div>
+          )}
+
           <div className="button-row">
             <button type="submit" disabled={isSubmitting}>
               {isSubmitting ? "Validating…" : "Validate matching request"}
@@ -821,7 +1127,11 @@ function App() {
               type="button"
               className="secondary"
               onClick={handleEmbeddingsUpdate}
-              disabled={isUpdatingEmbeddings}
+              disabled={
+                isUpdatingEmbeddings ||
+                isDatasetLoading ||
+                !datasetStatus?.isValid
+              }
             >
               {isUpdatingEmbeddings
                 ? "Checking embeddings…"
@@ -964,6 +1274,58 @@ function App() {
             }`}
           >
             {embeddingStatus.message}
+          </div>
+        )}
+
+        {isDatasetPreviewOpen && datasetStatus?.preview && (
+          <div className="dataset-preview-overlay">
+            <div className="dataset-preview-dialog">
+              <div className="dataset-preview-header">
+                <h3>Faculty dataset preview</h3>
+                <button
+                  type="button"
+                  className="ghost close-button"
+                  onClick={() => setIsDatasetPreviewOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="spreadsheet-preview-card dataset-preview-card">
+                <p className="small-note">
+                  Showing the first {datasetStatus.preview.rows.length} rows of
+                  the active TSV.
+                </p>
+                <div className="preview-table-wrapper">
+                  <table className="preview-table">
+                    <thead>
+                      <tr>
+                        {datasetStatus.preview.headers.map((header, index) => (
+                          <th key={`dataset-header-${index}`}>
+                            {header && header.trim().length > 0
+                              ? header
+                              : `Column ${index + 1}`}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {datasetStatus.preview.rows.map((row, rowIndex) => (
+                        <tr key={`dataset-row-${rowIndex}`}>
+                          {row.map((value, columnIndex) => (
+                            <td
+                              key={`dataset-cell-${rowIndex}-${columnIndex}`}
+                              title={value}
+                            >
+                              {value}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </main>
