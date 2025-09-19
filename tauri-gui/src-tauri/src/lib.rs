@@ -358,7 +358,7 @@ struct EmbeddingResponseRow {
     embedding: Vec<f32>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FacultyEmbeddingEntry {
     row_index: usize,
