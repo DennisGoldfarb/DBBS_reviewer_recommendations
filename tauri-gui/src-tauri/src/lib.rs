@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
+use uuid::Uuid;
 
 const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
 const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
@@ -22,6 +23,9 @@ const DEFAULT_FACULTY_EMBEDDINGS: &[u8] =
     include_bytes!("../assets/default_faculty_embeddings.json");
 const DEFAULT_EMBEDDING_MODEL: &str = "NeuML/pubmedbert-base-embeddings";
 const FACULTY_EMBEDDING_PROGRESS_EVENT: &str = "faculty-embedding-progress";
+const PROMPT_MATCHING_PROGRESS_EVENT: &str = "prompt-matching-progress";
+const PROMPT_MATCHING_COMPLETE_EVENT: &str = "prompt-matching-complete";
+const PROMPT_MATCHING_FAILED_EVENT: &str = "prompt-matching-failed";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +107,34 @@ struct SubmissionResponse {
     warnings: Vec<String>,
     details: SubmissionDetails,
     prompt_matches: Vec<PromptMatchResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PromptMatchingProgressPayload {
+    request_id: String,
+    phase: String,
+    message: Option<String>,
+    completed_steps: usize,
+    total_steps: usize,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PromptMatchingCompletePayload {
+    request_id: String,
+    matches: Vec<PromptMatchResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed_seconds: Option<f32>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PromptMatchingFailedPayload {
+    request_id: String,
+    message: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -303,21 +335,82 @@ fn submit_matching_request(
     );
 
     let mut prompt_matches = Vec::new();
-    if let (TaskType::Prompt, Some(prompt)) = (&task_type, prepared_prompt_text) {
-        let embedding_index = load_faculty_embedding_index(&app_handle)?;
-        if embedding_index.entries.is_empty() {
-            return Err(
-                "No faculty embeddings are available. Generate embeddings before matching.".into(),
-            );
-        }
-
+    let mut request_id = None;
+    if let (TaskType::Prompt, Some(prompt)) = (&task_type, prepared_prompt_text.clone()) {
+        let job_id = Uuid::new_v4().to_string();
+        request_id = Some(job_id.clone());
+        let app_handle_clone = app_handle.clone();
+        let prompt_clone = prompt.clone();
+        let total_steps = 3;
         let limit = faculty_recs_per_student.max(1) as usize;
-        let prompt_embedding = embed_prompt(&app_handle, &embedding_index, &prompt)?;
-        let matches = find_best_faculty_matches(&embedding_index, &prompt_embedding, limit);
 
-        prompt_matches.push(PromptMatchResult {
-            prompt,
-            faculty_matches: matches,
+        std::thread::spawn(move || {
+            let started_at = Instant::now();
+            let emit_progress = |phase: &str, message: &str, completed: usize| {
+                let payload = PromptMatchingProgressPayload {
+                    request_id: job_id.clone(),
+                    phase: phase.to_string(),
+                    message: Some(message.to_string()),
+                    completed_steps: completed,
+                    total_steps: total_steps,
+                };
+                let _ = app_handle_clone.emit(PROMPT_MATCHING_PROGRESS_EVENT, payload);
+            };
+
+            emit_progress("loading-index", "Loading faculty embedding index…", 1);
+
+            let embedding_index = match load_faculty_embedding_index(&app_handle_clone) {
+                Ok(index) => index,
+                Err(error) => {
+                    let payload = PromptMatchingFailedPayload {
+                        request_id: job_id.clone(),
+                        message: format!("Unable to load the faculty embedding index: {}", error),
+                    };
+                    let _ = app_handle_clone.emit(PROMPT_MATCHING_FAILED_EVENT, payload);
+                    return;
+                }
+            };
+
+            if embedding_index.entries.is_empty() {
+                let payload = PromptMatchingFailedPayload {
+                    request_id: job_id.clone(),
+                    message:
+                        "No faculty embeddings are available. Generate embeddings before matching."
+                            .into(),
+                };
+                let _ = app_handle_clone.emit(PROMPT_MATCHING_FAILED_EVENT, payload);
+                return;
+            }
+
+            emit_progress("embedding-prompt", "Embedding the prompt…", 2);
+
+            let prompt_embedding =
+                match embed_prompt(&app_handle_clone, &embedding_index, &prompt_clone) {
+                    Ok(embedding) => embedding,
+                    Err(error) => {
+                        let payload = PromptMatchingFailedPayload {
+                            request_id: job_id.clone(),
+                            message: format!("Unable to embed the prompt: {}", error),
+                        };
+                        let _ = app_handle_clone.emit(PROMPT_MATCHING_FAILED_EVENT, payload);
+                        return;
+                    }
+                };
+
+            emit_progress("finding-matches", "Finding the best faculty matches…", 3);
+
+            let matches = find_best_faculty_matches(&embedding_index, &prompt_embedding, limit);
+            let elapsed_seconds = Some(started_at.elapsed().as_secs_f32());
+
+            let payload = PromptMatchingCompletePayload {
+                request_id: job_id.clone(),
+                matches: vec![PromptMatchResult {
+                    prompt: prompt_clone,
+                    faculty_matches: matches,
+                }],
+                elapsed_seconds,
+            };
+            let _ = app_handle_clone.emit(PROMPT_MATCHING_COMPLETE_EVENT, payload);
         });
     }
 
@@ -326,6 +419,7 @@ fn submit_matching_request(
         warnings,
         details,
         prompt_matches,
+        request_id,
     })
 }
 

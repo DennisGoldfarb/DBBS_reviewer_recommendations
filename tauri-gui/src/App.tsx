@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -80,6 +80,7 @@ interface SubmissionResponse {
   warnings: string[];
   details: SubmissionDetails;
   promptMatches: PromptMatchResult[];
+  requestId?: string | null;
 }
 
 interface StatusMessage {
@@ -94,6 +95,25 @@ interface EmbeddingProgressPayload {
   totalRows: number;
   elapsedSeconds?: number | null;
   estimatedRemainingSeconds?: number | null;
+}
+
+interface PromptMatchingProgressPayload {
+  requestId: string;
+  phase: string;
+  message?: string | null;
+  completedSteps: number;
+  totalSteps: number;
+}
+
+interface PromptMatchingCompletePayload {
+  requestId: string;
+  matches: PromptMatchResult[];
+  elapsedSeconds?: number | null;
+}
+
+interface PromptMatchingFailedPayload {
+  requestId: string;
+  message: string;
 }
 
 const THEME_STORAGE_KEY = "washu-theme";
@@ -188,6 +208,26 @@ const describeEmbeddingProgress = (
   return pieces.filter(Boolean).join(" – ");
 };
 
+const describePromptMatchingProgress = (
+  progress: PromptMatchingProgressPayload,
+): string => {
+  const pieces: string[] = [];
+  const baseMessage = progress.message?.trim();
+
+  if (baseMessage) {
+    pieces.push(baseMessage);
+  } else {
+    pieces.push("Running faculty matching…");
+  }
+
+  if (progress.totalSteps > 0) {
+    const step = Math.max(1, Math.min(progress.completedSteps, progress.totalSteps));
+    pieces.push(`Step ${step} of ${progress.totalSteps}`);
+  }
+
+  return pieces.join(" – ");
+};
+
 const formatSimilarity = (value: number): string => {
   if (!Number.isFinite(value)) {
     return "n/a";
@@ -230,6 +270,12 @@ function App() {
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
   const [embeddingProgress, setEmbeddingProgress] =
     useState<EmbeddingProgressPayload | null>(null);
+  const [promptMatchingStatus, setPromptMatchingStatus] =
+    useState<StatusMessage | null>(null);
+  const [activeMatchingRequestId, setActiveMatchingRequestId] = useState<string | null>(
+    null,
+  );
+  const [isAwaitingPromptResult, setIsAwaitingPromptResult] = useState(false);
   const [datasetStatus, setDatasetStatus] =
     useState<FacultyDatasetStatus | null>(null);
   const [isDatasetLoading, setIsDatasetLoading] = useState(true);
@@ -259,6 +305,7 @@ function App() {
   const [datasetConfigurationError, setDatasetConfigurationError] = useState<
     string | null
   >(null);
+  const activeMatchingRequestIdRef = useRef<string | null>(null);
   const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
 
   useEffect(() => {
@@ -284,6 +331,10 @@ function App() {
     theme === "light"
       ? "Switch to dark WashU theme"
       : "Switch to light WashU theme";
+
+  useEffect(() => {
+    activeMatchingRequestIdRef.current = activeMatchingRequestId;
+  }, [activeMatchingRequestId, activeMatchingRequestIdRef]);
 
   const applyDatasetStatus = useCallback(
     (
@@ -355,6 +406,139 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    const unlistenFns: UnlistenFn[] = [];
+
+    const registerListeners = async () => {
+      try {
+        const unlistenProgress = await listen<PromptMatchingProgressPayload>(
+          "prompt-matching-progress",
+          (event) => {
+            if (!isMounted) {
+              return;
+            }
+
+            if (activeMatchingRequestIdRef.current !== event.payload.requestId) {
+              return;
+            }
+
+            setPromptMatchingStatus({
+              variant: "info",
+              message: describePromptMatchingProgress(event.payload),
+            });
+            setIsAwaitingPromptResult(true);
+          },
+        );
+        unlistenFns.push(unlistenProgress);
+      } catch {
+        /* ignore listener errors */
+      }
+
+      try {
+        const unlistenComplete = await listen<PromptMatchingCompletePayload>(
+          "prompt-matching-complete",
+          (event) => {
+            if (!isMounted) {
+              return;
+            }
+
+            if (activeMatchingRequestIdRef.current !== event.payload.requestId) {
+              return;
+            }
+
+            setPromptMatchingStatus(() => {
+              const seconds = event.payload.elapsedSeconds;
+              if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {
+                return {
+                  variant: "success",
+                  message: `Matching completed in ${formatDuration(seconds)}.`,
+                };
+              }
+
+              return {
+                variant: "success",
+                message: "Matching completed successfully.",
+              };
+            });
+            setIsAwaitingPromptResult(false);
+            setActiveMatchingRequestId(null);
+            activeMatchingRequestIdRef.current = null;
+            setResult((current) => {
+              if (!current) {
+                return current;
+              }
+
+              if (current.requestId && current.requestId !== event.payload.requestId) {
+                return current;
+              }
+
+              return {
+                ...current,
+                promptMatches: event.payload.matches,
+              };
+            });
+          },
+        );
+        unlistenFns.push(unlistenComplete);
+      } catch {
+        /* ignore listener errors */
+      }
+
+      try {
+        const unlistenFailed = await listen<PromptMatchingFailedPayload>(
+          "prompt-matching-failed",
+          (event) => {
+            if (!isMounted) {
+              return;
+            }
+
+            if (activeMatchingRequestIdRef.current !== event.payload.requestId) {
+              return;
+            }
+
+            setPromptMatchingStatus({
+              variant: "error",
+              message: event.payload.message,
+            });
+            setIsAwaitingPromptResult(false);
+            setActiveMatchingRequestId(null);
+            activeMatchingRequestIdRef.current = null;
+            setResult((current) => {
+              if (!current) {
+                return current;
+              }
+
+              if (current.requestId && current.requestId !== event.payload.requestId) {
+                return current;
+              }
+
+              return {
+                ...current,
+                promptMatches: [],
+              };
+            });
+          },
+        );
+        unlistenFns.push(unlistenFailed);
+      } catch {
+        /* ignore listener errors */
+      }
+    };
+
+    registerListeners();
+
+    return () => {
+      isMounted = false;
+      while (unlistenFns.length > 0) {
+        const fn = unlistenFns.pop();
+        if (fn) {
+          fn();
+        }
+      }
+    };
+  }, [activeMatchingRequestIdRef]);
 
   useEffect(() => {
     if (!datasetStatus?.analysis) {
@@ -779,6 +963,8 @@ function App() {
     return trimmed.length > 0 ? trimmed : `Column ${index + 1}`;
   };
 
+  const isMatchRunning = isSubmitting || isAwaitingPromptResult;
+
   const mapSelectedColumns = (indexes: number[]) => {
     const unique = Array.from(new Set(indexes)).filter((index) => index >= 0);
 
@@ -843,6 +1029,10 @@ function App() {
     setIsSubmitting(true);
     setError(null);
     setResult(null);
+    setPromptMatchingStatus(null);
+    setActiveMatchingRequestId(null);
+    activeMatchingRequestIdRef.current = null;
+    setIsAwaitingPromptResult(false);
 
     const programFilters = selectedPrograms;
     const facultyRecommendations = Math.max(
@@ -924,12 +1114,29 @@ function App() {
       );
 
       setResult(response);
+
+      if (taskType === "prompt" && response.requestId) {
+        setActiveMatchingRequestId(response.requestId);
+        activeMatchingRequestIdRef.current = response.requestId;
+        setIsAwaitingPromptResult(true);
+        setPromptMatchingStatus({
+          variant: "info",
+          message: "Preparing matching request…",
+        });
+      } else {
+        setActiveMatchingRequestId(null);
+        activeMatchingRequestIdRef.current = null;
+        setIsAwaitingPromptResult(false);
+      }
     } catch (submissionError) {
       const message =
         submissionError instanceof Error
           ? submissionError.message
           : String(submissionError);
       setError(message);
+      setActiveMatchingRequestId(null);
+      activeMatchingRequestIdRef.current = null;
+      setIsAwaitingPromptResult(false);
     } finally {
       setIsSubmitting(false);
     }
@@ -1525,8 +1732,8 @@ function App() {
           )}
 
           <div className="button-row">
-            <button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Validating…" : "Validate matching request"}
+            <button type="submit" disabled={isMatchRunning}>
+              {isMatchRunning ? "Matching…" : "Run matching"}
             </button>
             <button
               type="button"
@@ -1544,6 +1751,20 @@ function App() {
             </button>
           </div>
         </form>
+
+        {promptMatchingStatus && (
+          <div
+            className={`status-banner ${
+              promptMatchingStatus.variant === "success"
+                ? "status-success"
+                : promptMatchingStatus.variant === "error"
+                  ? "status-error"
+                  : "status-info"
+            }`}
+          >
+            {promptMatchingStatus.message}
+          </div>
+        )}
 
         {error && (
           <div className="status-banner status-error">{error}</div>
@@ -1679,6 +1900,12 @@ function App() {
                             faculty.identifiers,
                           );
                           const hasIdentifiers = identifierEntries.length > 0;
+
+                          if (hasIdentifiers) {
+                            identifierEntries.sort((a, b) =>
+                              a[0].localeCompare(b[0]),
+                            );
+                          }
 
                           return (
                             <li
