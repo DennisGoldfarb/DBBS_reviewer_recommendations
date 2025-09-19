@@ -404,7 +404,16 @@ fn emit_embedding_error(app_handle: &tauri::AppHandle, total_rows: usize, messag
 }
 
 #[tauri::command]
-fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, String> {
+async fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let result =
+        tauri::async_runtime::spawn_blocking(move || perform_faculty_embedding_refresh(app_handle))
+            .await
+            .map_err(|err| format!("Embedding refresh task failed: {err}"))?;
+
+    Ok(result)
+}
+
+fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<String, String> {
     let started_at = Instant::now();
     emit_faculty_embedding_progress(
         &app_handle,
