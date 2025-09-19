@@ -110,6 +110,15 @@ struct SpreadsheetPreview {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct FacultyDatasetPreviewResponse {
+    preview: SpreadsheetPreview,
+    suggested_embedding_columns: Vec<usize>,
+    suggested_identifier_columns: Vec<usize>,
+    suggested_program_columns: Vec<usize>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct FacultyDatasetStatus {
     path: Option<String>,
     canonical_path: Option<String>,
@@ -131,6 +140,17 @@ struct FacultyDatasetAnalysis {
     identifier_columns: Vec<String>,
     program_columns: Vec<String>,
     available_programs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyDatasetColumnConfiguration {
+    #[serde(default)]
+    embedding_columns: Vec<usize>,
+    #[serde(default)]
+    identifier_columns: Vec<usize>,
+    #[serde(default)]
+    program_columns: Vec<usize>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -293,9 +313,44 @@ fn get_faculty_dataset_status(
 }
 
 #[tauri::command]
+fn preview_faculty_dataset_replacement(
+    path: String,
+) -> Result<FacultyDatasetPreviewResponse, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a TSV, TXT, or Excel file to import for the faculty dataset.".into());
+    }
+
+    let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty dataset file")?;
+
+    let extension = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if !FACULTY_DATASET_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(
+            "Select a tab-delimited .tsv or .txt file, or an Excel workbook (.xlsx or .xls) to replace the faculty dataset.".into(),
+        );
+    }
+
+    let preview = build_dataset_preview(&source)?;
+    let program_columns = suggest_program_columns(&preview.headers, &preview.rows);
+
+    Ok(FacultyDatasetPreviewResponse {
+        suggested_embedding_columns: preview.suggested_prompt_columns.clone(),
+        suggested_identifier_columns: preview.suggested_identifier_columns.clone(),
+        suggested_program_columns: program_columns,
+        preview,
+    })
+}
+
+#[tauri::command]
 fn replace_faculty_dataset(
     app_handle: tauri::AppHandle,
     path: String,
+    configuration: Option<FacultyDatasetColumnConfiguration>,
 ) -> Result<FacultyDatasetStatus, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -324,7 +379,8 @@ fn replace_faculty_dataset(
     fs::copy(&source, &destination)
         .map_err(|err| format!("Unable to replace the faculty dataset: {err}"))?;
 
-    let mut status = build_faculty_dataset_status(&app_handle)?;
+    let mut status =
+        build_faculty_dataset_status_with_overrides(&app_handle, configuration.as_ref())?;
     if status.message.is_none() {
         status.message = Some("Faculty dataset replaced successfully.".into());
         status.message_variant = Some("success".into());
@@ -597,6 +653,13 @@ fn detect_delimiter(path: &Path) -> Result<u8, String> {
 fn build_faculty_dataset_status(
     app_handle: &tauri::AppHandle,
 ) -> Result<FacultyDatasetStatus, String> {
+    build_faculty_dataset_status_with_overrides(app_handle, None)
+}
+
+fn build_faculty_dataset_status_with_overrides(
+    app_handle: &tauri::AppHandle,
+    overrides: Option<&FacultyDatasetColumnConfiguration>,
+) -> Result<FacultyDatasetStatus, String> {
     let dataset_path = dataset_destination(app_handle)?;
     let mut status = FacultyDatasetStatus {
         path: Some(dataset_path.to_string_lossy().into_owned()),
@@ -674,7 +737,7 @@ fn build_faculty_dataset_status(
     }
 
     if status.is_valid {
-        match analyze_faculty_dataset(app_handle, &dataset_path) {
+        match analyze_faculty_dataset(app_handle, &dataset_path, overrides) {
             Ok(analysis) => {
                 status.analysis = Some(analysis);
             }
@@ -707,6 +770,7 @@ fn build_faculty_dataset_status(
 fn analyze_faculty_dataset(
     app_handle: &tauri::AppHandle,
     dataset_path: &Path,
+    overrides: Option<&FacultyDatasetColumnConfiguration>,
 ) -> Result<FacultyDatasetAnalysis, String> {
     let (mut headers, mut rows) = read_full_spreadsheet(dataset_path)?;
     if headers.is_empty() {
@@ -715,8 +779,34 @@ fn analyze_faculty_dataset(
 
     align_row_lengths(&mut headers, &mut rows);
 
-    let (embedding_indexes, identifier_indexes) = suggest_spreadsheet_columns(&headers, &rows);
-    let program_indexes = suggest_program_columns(&headers, &rows);
+    let column_count = headers.len();
+
+    let (mut embedding_indexes, mut identifier_indexes) = if let Some(config) = overrides {
+        (
+            normalize_column_selection(&config.embedding_columns, column_count),
+            normalize_column_selection(&config.identifier_columns, column_count),
+        )
+    } else {
+        suggest_spreadsheet_columns(&headers, &rows)
+    };
+
+    let mut program_indexes = if let Some(config) = overrides {
+        normalize_column_selection(&config.program_columns, column_count)
+    } else {
+        suggest_program_columns(&headers, &rows)
+    };
+
+    if embedding_indexes.is_empty() {
+        return Err(
+            "Select at least one column containing faculty research interests or other embedding content.".into(),
+        );
+    }
+
+    if identifier_indexes.is_empty() {
+        return Err(
+            "Select at least one column that uniquely identifies each faculty member.".into(),
+        );
+    }
 
     let analysis = FacultyDatasetAnalysis {
         embedding_columns: indexes_to_headers(&headers, &embedding_indexes),
@@ -819,6 +909,23 @@ fn indexes_to_headers(headers: &[String], indexes: &[usize]) -> Vec<String> {
     }
 
     values
+}
+
+fn normalize_column_selection(indexes: &[usize], column_count: usize) -> Vec<usize> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for &index in indexes {
+        if index >= column_count {
+            continue;
+        }
+
+        if seen.insert(index) {
+            normalized.push(index);
+        }
+    }
+
+    normalized
 }
 
 fn header_label(headers: &[String], index: usize) -> String {
@@ -1412,6 +1519,7 @@ pub fn run() {
             update_faculty_embeddings,
             analyze_spreadsheet,
             get_faculty_dataset_status,
+            preview_faculty_dataset_replacement,
             replace_faculty_dataset,
             restore_default_faculty_dataset
         ])
