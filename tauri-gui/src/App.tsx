@@ -6,22 +6,7 @@ import "./App.css";
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
 type FacultyScope = "all" | "program" | "custom";
 
-const PROGRAM_OPTIONS = [
-  "Biochemistry, Biophysics, and Structural Biology",
-  "Biomedical Informatics and Data Science",
-  "Cancer Biology",
-  "Computational and Systems Biology",
-  "Developmental, Regenerative and Stem Cell Biology",
-  "Evolution, Ecology and Population Biology",
-  "Immunology",
-  "Molecular Cell Biology",
-  "Molecular Genetics and Genomics",
-  "Molecular Microbiology and Microbial Pathogenesis",
-  "Neurosciences",
-  "Plant & Microbial Biosciences",
-] as const;
-
-type ProgramName = (typeof PROGRAM_OPTIONS)[number];
+type ProgramName = string;
 
 interface PathConfirmation {
   label: string;
@@ -35,6 +20,20 @@ interface SpreadsheetPreview {
   suggestedIdentifierColumns: number[];
 }
 
+interface FacultyDatasetAnalysis {
+  embeddingColumns: string[];
+  identifierColumns: string[];
+  programColumns: string[];
+  availablePrograms: string[];
+}
+
+interface FacultyDatasetPreviewResult {
+  preview: SpreadsheetPreview;
+  suggestedEmbeddingColumns: number[];
+  suggestedIdentifierColumns: number[];
+  suggestedProgramColumns: number[];
+}
+
 interface FacultyDatasetStatus {
   path: string | null;
   canonicalPath: string | null;
@@ -46,6 +45,7 @@ interface FacultyDatasetStatus {
   message: string | null;
   messageVariant: StatusMessage["variant"] | null;
   preview: SpreadsheetPreview | null;
+  analysis: FacultyDatasetAnalysis | null;
 }
 
 interface SubmissionDetails {
@@ -80,6 +80,7 @@ function App() {
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
+  const [availablePrograms, setAvailablePrograms] = useState<ProgramName[]>([]);
   const [selectedPrograms, setSelectedPrograms] = useState<ProgramName[]>([]);
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
@@ -110,6 +111,29 @@ function App() {
   const [isDatasetBusy, setIsDatasetBusy] = useState(false);
   const [datasetBanner, setDatasetBanner] = useState<StatusMessage | null>(null);
   const [isDatasetPreviewOpen, setIsDatasetPreviewOpen] = useState(false);
+  const [isDatasetConfigurationOpen, setIsDatasetConfigurationOpen] =
+    useState(false);
+  const [datasetConfigurationPath, setDatasetConfigurationPath] =
+    useState("");
+  const [datasetConfigurationPreview, setDatasetConfigurationPreview] =
+    useState<SpreadsheetPreview | null>(null);
+  const [isLoadingDatasetConfiguration, setIsLoadingDatasetConfiguration] =
+    useState(false);
+  const [
+    datasetConfigurationEmbeddingColumns,
+    setDatasetConfigurationEmbeddingColumns,
+  ] = useState<number[]>([]);
+  const [
+    datasetConfigurationIdentifierColumns,
+    setDatasetConfigurationIdentifierColumns,
+  ] = useState<number[]>([]);
+  const [
+    datasetConfigurationProgramColumns,
+    setDatasetConfigurationProgramColumns,
+  ] = useState<number[]>([]);
+  const [datasetConfigurationError, setDatasetConfigurationError] = useState<
+    string | null
+  >(null);
 
   const applyDatasetStatus = useCallback(
     (
@@ -155,6 +179,34 @@ function App() {
 
     loadStatus();
   }, [applyDatasetStatus]);
+
+  useEffect(() => {
+    if (!datasetStatus?.analysis) {
+      setAvailablePrograms([]);
+      setSelectedPrograms([]);
+      if (facultyScope === "program") {
+        setFacultyScope("all");
+      }
+      return;
+    }
+
+    const programs = [...datasetStatus.analysis.availablePrograms];
+    setAvailablePrograms(programs);
+    setSelectedPrograms((previous) => {
+      const filtered = previous.filter((program) => programs.includes(program));
+      if (
+        filtered.length === previous.length &&
+        filtered.every((value, index) => value === previous[index])
+      ) {
+        return previous;
+      }
+      return filtered;
+    });
+
+    if (programs.length === 0 && facultyScope === "program") {
+      setFacultyScope("all");
+    }
+  }, [datasetStatus, facultyScope]);
 
   const runEmbeddingRefresh = useCallback(
     async (statusForValidation: FacultyDatasetStatus | null) => {
@@ -215,6 +267,37 @@ function App() {
     }
   };
 
+  const openDatasetConfiguration = async (path: string) => {
+    resetDatasetConfiguration();
+    setDatasetConfigurationPath(path);
+    setIsDatasetConfigurationOpen(true);
+    setIsLoadingDatasetConfiguration(true);
+    try {
+      const preview = await invoke<FacultyDatasetPreviewResult>(
+        "preview_faculty_dataset_replacement",
+        { path },
+      );
+      setDatasetConfigurationPreview(preview.preview);
+      setDatasetConfigurationEmbeddingColumns(
+        [...preview.suggestedEmbeddingColumns].sort((a, b) => a - b),
+      );
+      setDatasetConfigurationIdentifierColumns(
+        [...preview.suggestedIdentifierColumns].sort((a, b) => a - b),
+      );
+      setDatasetConfigurationProgramColumns(
+        [...preview.suggestedProgramColumns].sort((a, b) => a - b),
+      );
+    } catch (previewError) {
+      const message =
+        previewError instanceof Error
+          ? previewError.message
+          : String(previewError);
+      setDatasetConfigurationError(message);
+    } finally {
+      setIsLoadingDatasetConfiguration(false);
+    }
+  };
+
   const handleDatasetReplacement = async () => {
     setDatasetBanner(null);
     const selection = await selectDatasetFile();
@@ -222,21 +305,75 @@ function App() {
       return;
     }
 
+    void openDatasetConfiguration(selection);
+  };
+
+  const closeDatasetConfiguration = () => {
+    if (isDatasetBusy) {
+      return;
+    }
+    setIsDatasetConfigurationOpen(false);
+    resetDatasetConfiguration();
+  };
+
+  const handleConfirmDatasetReplacement = async () => {
+    if (!datasetConfigurationPreview) {
+      setDatasetConfigurationError(
+        "Load the dataset preview before importing the faculty roster.",
+      );
+      return;
+    }
+
+    if (datasetConfigurationEmbeddingColumns.length === 0) {
+      setDatasetConfigurationError(
+        "Select at least one column containing faculty research interests or similar embedding content.",
+      );
+      return;
+    }
+
+    if (datasetConfigurationIdentifierColumns.length === 0) {
+      setDatasetConfigurationError(
+        "Select at least one column that uniquely identifies each faculty member.",
+      );
+      return;
+    }
+
+    setDatasetConfigurationError(null);
+    setDatasetBanner(null);
     setIsDatasetBusy(true);
+
     try {
       const status = await invoke<FacultyDatasetStatus>(
         "replace_faculty_dataset",
-        { path: selection },
+        {
+          path: datasetConfigurationPath,
+          configuration: {
+            embeddingColumns: datasetConfigurationEmbeddingColumns,
+            identifierColumns: datasetConfigurationIdentifierColumns,
+            programColumns: datasetConfigurationProgramColumns,
+          },
+        },
       );
       applyDatasetStatus(status, "success");
-      if (status.isValid) {
-        await runEmbeddingRefresh(status);
+
+      if (!status.isValid) {
+        setDatasetConfigurationError(
+          status.message ??
+            "Review the selected columns and try importing the dataset again.",
+        );
+        return;
       }
+
+      setIsDatasetConfigurationOpen(false);
+      resetDatasetConfiguration();
+
+      await runEmbeddingRefresh(status);
     } catch (replacementError) {
       const message =
         replacementError instanceof Error
           ? replacementError.message
           : String(replacementError);
+      setDatasetConfigurationError(message);
       setDatasetBanner({
         variant: "error",
         message: `Unable to replace the faculty dataset: ${message}`,
@@ -287,6 +424,16 @@ function App() {
     setIsLoadingSpreadsheetPreview(false);
   };
 
+  const resetDatasetConfiguration = () => {
+    setDatasetConfigurationPreview(null);
+    setDatasetConfigurationEmbeddingColumns([]);
+    setDatasetConfigurationIdentifierColumns([]);
+    setDatasetConfigurationProgramColumns([]);
+    setDatasetConfigurationError(null);
+    setDatasetConfigurationPath("");
+    setIsLoadingDatasetConfiguration(false);
+  };
+
   const handleTaskTypeChange = (value: TaskType) => {
     setTaskType(value);
     setError(null);
@@ -298,6 +445,10 @@ function App() {
   };
 
   const handleFacultyScopeChange = (value: FacultyScope) => {
+    if (value === "program" && availablePrograms.length === 0) {
+      return;
+    }
+
     setFacultyScope(value);
     setError(null);
     setResult(null);
@@ -312,6 +463,10 @@ function App() {
   };
 
   const toggleProgramSelection = (program: ProgramName) => {
+    if (!availablePrograms.includes(program)) {
+      return;
+    }
+
     setSelectedPrograms((current) => {
       if (current.includes(program)) {
         return current.filter((entry) => entry !== program);
@@ -456,6 +611,53 @@ function App() {
     return unique
       .filter((index) => index < spreadsheetPreview.headers.length)
       .map((index) => getColumnLabel(index));
+  };
+
+  const getDatasetConfigurationColumnLabel = (index: number) => {
+    if (!datasetConfigurationPreview) {
+      return `Column ${index + 1}`;
+    }
+
+    const header = datasetConfigurationPreview.headers[index];
+    if (!header) {
+      return `Column ${index + 1}`;
+    }
+
+    const trimmed = header.trim();
+    return trimmed.length > 0 ? trimmed : `Column ${index + 1}`;
+  };
+
+  const toggleDatasetEmbeddingColumn = (index: number) => {
+    setDatasetConfigurationEmbeddingColumns((current) => {
+      const updated = current.includes(index)
+        ? current.filter((entry) => entry !== index)
+        : [...current, index];
+      updated.sort((a, b) => a - b);
+      return updated;
+    });
+    setDatasetConfigurationError(null);
+  };
+
+  const toggleDatasetIdentifierColumn = (index: number) => {
+    setDatasetConfigurationIdentifierColumns((current) => {
+      const updated = current.includes(index)
+        ? current.filter((entry) => entry !== index)
+        : [...current, index];
+      updated.sort((a, b) => a - b);
+      return updated;
+    });
+    setDatasetConfigurationError(null);
+  };
+
+  const toggleDatasetProgramColumn = (index: number) => {
+    setDatasetConfigurationProgramColumns((current) => {
+      const updated = current.includes(index)
+        ? current.filter((entry) => entry !== index)
+        : [...current, index];
+      updated.sort((a, b) => a - b);
+      return updated;
+    });
+    setDatasetConfigurationError(null);
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -871,6 +1073,9 @@ function App() {
                   name="faculty-scope"
                   value="program"
                   checked={facultyScope === "program"}
+                  disabled={
+                    isDatasetLoading || availablePrograms.length === 0
+                  }
                   onChange={() => handleFacultyScopeChange("program")}
                 />
                 <span>Limit to programs</span>
@@ -886,26 +1091,40 @@ function App() {
                 <span>Provide a faculty list</span>
               </label>
             </div>
+            {availablePrograms.length === 0 &&
+              !isDatasetLoading &&
+              datasetStatus?.analysis && (
+                <p className="small-note">
+                  No program affiliations were detected in the active faculty
+                  dataset.
+                </p>
+              )}
 
             {facultyScope === "program" && (
               <div className="input-stack narrow-column">
                 <span className="input-heading">Programs or tracks</span>
                 <div className="program-checkbox-grid">
-                  {PROGRAM_OPTIONS.map((program) => {
-                    const isSelected = selectedPrograms.includes(program);
+                  {availablePrograms.length === 0 ? (
+                    <p className="small-note">
+                      No program columns were detected in the active dataset.
+                    </p>
+                  ) : (
+                    availablePrograms.map((program) => {
+                      const isSelected = selectedPrograms.includes(program);
 
-                    return (
-                      <label key={program} className="checkbox-option">
-                        <input
-                          type="checkbox"
-                          value={program}
-                          checked={isSelected}
-                          onChange={() => toggleProgramSelection(program)}
-                        />
-                        <span>{program}</span>
-                      </label>
-                    );
-                  })}
+                      return (
+                        <label key={program} className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            value={program}
+                            checked={isSelected}
+                            onChange={() => toggleProgramSelection(program)}
+                          />
+                          <span>{program}</span>
+                        </label>
+                      );
+                    })
+                  )}
                 </div>
                 <p className="small-note">
                   Select the programs that should be included in the faculty
@@ -1078,7 +1297,9 @@ function App() {
               <button
                 type="button"
                 onClick={handleDatasetReplacement}
-                disabled={isDatasetBusy || isDatasetLoading}
+                disabled={
+                  isDatasetBusy || isDatasetLoading || isDatasetConfigurationOpen
+                }
               >
                 Replace dataset
               </button>
@@ -1086,7 +1307,9 @@ function App() {
                 type="button"
                 className="secondary"
                 onClick={handleDatasetRestore}
-                disabled={isDatasetBusy || isDatasetLoading}
+                disabled={
+                  isDatasetBusy || isDatasetLoading || isDatasetConfigurationOpen
+                }
               >
                 Restore default
               </button>
@@ -1097,6 +1320,7 @@ function App() {
                 disabled={
                   isDatasetBusy ||
                   isDatasetLoading ||
+                  isDatasetConfigurationOpen ||
                   !datasetStatus?.preview
                 }
               >
@@ -1274,6 +1498,180 @@ function App() {
             }`}
           >
             {embeddingStatus.message}
+          </div>
+        )}
+
+        {isDatasetConfigurationOpen && (
+          <div className="dataset-preview-overlay">
+            <div className="dataset-preview-dialog">
+              <div className="dataset-preview-header">
+                <h3>Import faculty dataset</h3>
+                <button
+                  type="button"
+                  className="ghost close-button"
+                  onClick={closeDatasetConfiguration}
+                  disabled={isDatasetBusy}
+                >
+                  Close
+                </button>
+              </div>
+              {datasetConfigurationPath && (
+                <div className="path-preview">{datasetConfigurationPath}</div>
+              )}
+              {datasetConfigurationError && (
+                <div className="preview-error">{datasetConfigurationError}</div>
+              )}
+              {isLoadingDatasetConfiguration && (
+                <div className="preview-status">Loading preview…</div>
+              )}
+              {!isLoadingDatasetConfiguration && datasetConfigurationPreview && (
+                <>
+                  <div className="spreadsheet-preview-card">
+                    <div className="column-selector-group">
+                      <div className="column-selector">
+                        <h4>Embedding columns</h4>
+                        <p className="small-note">
+                          Choose the columns describing faculty research interests
+                          or other content that should be embedded.
+                        </p>
+                        <div className="column-checkbox-list">
+                          {datasetConfigurationPreview.headers.map((_, index) => {
+                            const isChecked =
+                              datasetConfigurationEmbeddingColumns.includes(index);
+                            return (
+                              <label
+                                key={`dataset-embedding-${index}`}
+                                className="column-checkbox-option"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleDatasetEmbeddingColumn(index)}
+                                  disabled={isDatasetBusy}
+                                />
+                                <span>{getDatasetConfigurationColumnLabel(index)}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="column-selector">
+                        <h4>Identifier columns</h4>
+                        <p className="small-note">
+                          Select the columns that uniquely identify each faculty
+                          member.
+                        </p>
+                        <div className="column-checkbox-list">
+                          {datasetConfigurationPreview.headers.map((_, index) => {
+                            const isChecked =
+                              datasetConfigurationIdentifierColumns.includes(index);
+                            return (
+                              <label
+                                key={`dataset-identifier-${index}`}
+                                className="column-checkbox-option"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleDatasetIdentifierColumn(index)}
+                                  disabled={isDatasetBusy}
+                                />
+                                <span>{getDatasetConfigurationColumnLabel(index)}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="column-selector">
+                        <h4>Program columns</h4>
+                        <p className="small-note">
+                          Optional: include the columns that list program or track
+                          affiliations to enable program filtering.
+                        </p>
+                        <div className="column-checkbox-list">
+                          {datasetConfigurationPreview.headers.map((_, index) => {
+                            const isChecked =
+                              datasetConfigurationProgramColumns.includes(index);
+                            return (
+                              <label
+                                key={`dataset-program-${index}`}
+                                className="column-checkbox-option"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleDatasetProgramColumn(index)}
+                                  disabled={isDatasetBusy}
+                                />
+                                <span>{getDatasetConfigurationColumnLabel(index)}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="spreadsheet-preview-card dataset-preview-card">
+                    <p className="small-note">
+                      Showing the first {datasetConfigurationPreview.rows.length} rows
+                      of the selected dataset.
+                    </p>
+                    <div className="preview-table-wrapper">
+                      <table className="preview-table">
+                        <thead>
+                          <tr>
+                            {datasetConfigurationPreview.headers.map((header, index) => (
+                              <th key={`dataset-config-header-${index}`}>
+                                {header && header.trim().length > 0
+                                  ? header
+                                  : `Column ${index + 1}`}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {datasetConfigurationPreview.rows.map((row, rowIndex) => (
+                            <tr key={`dataset-config-row-${rowIndex}`}>
+                              {row.map((value, columnIndex) => (
+                                <td
+                                  key={`dataset-config-cell-${rowIndex}-${columnIndex}`}
+                                  title={value}
+                                >
+                                  {value}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+              <div className="dataset-config-actions">
+                <button
+                  type="button"
+                  onClick={handleConfirmDatasetReplacement}
+                  disabled={
+                    isDatasetBusy ||
+                    isLoadingDatasetConfiguration ||
+                    !datasetConfigurationPreview ||
+                    datasetConfigurationEmbeddingColumns.length === 0 ||
+                    datasetConfigurationIdentifierColumns.length === 0
+                  }
+                >
+                  {isDatasetBusy ? "Importing…" : "Import dataset"}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={closeDatasetConfiguration}
+                  disabled={isDatasetBusy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

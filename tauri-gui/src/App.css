@@ -518,6 +518,14 @@ button.add-entry-button:not(:disabled):hover {
   color: #475569;
 }
 
+.dataset-config-actions {
+  margin-top: 1.25rem;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .close-button {
   padding: 0.5rem 1rem;
 }
