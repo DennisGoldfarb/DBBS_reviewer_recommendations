@@ -4,15 +4,48 @@
   font-size: 15px;
   line-height: 1.5;
   font-weight: 400;
-  color: #0f172a;
-  background-color: #f1f5f9;
+  color: var(--washu-text);
+  background-color: var(--washu-page);
+
+  --washu-page: #f7f1eb;
+  --washu-page-strong: #ede1d5;
+  --washu-surface: #ffffff;
+  --washu-surface-muted: #faf3ee;
+  --washu-border: #d7c5b7;
+  --washu-border-strong: #c4a899;
+  --washu-text: #2e2d29;
+  --washu-heading: #2e2d29;
+  --washu-text-muted: #6d6e71;
+  --washu-primary: #ad0000;
+  --washu-primary-dark: #7f0000;
+  --washu-primary-soft: #f3d1d1;
+  --washu-accent: #5c1764;
+  --washu-accent-soft: #ead6ef;
+  --washu-info: #005f9e;
+  --washu-info-soft: #d6e6f3;
+  --washu-warning: #b45309;
+  --washu-warning-soft: #f6e0c7;
+  --washu-danger: #8c1c13;
+  --washu-danger-soft: #f4d4d1;
+  --washu-shadow-soft: rgba(67, 34, 24, 0.08);
+  --washu-shadow: rgba(67, 34, 24, 0.12);
+  --washu-shadow-strong: rgba(67, 34, 24, 0.2);
+  --washu-primary-shadow: rgba(173, 0, 0, 0.25);
+  --washu-primary-shadow-strong: rgba(173, 0, 0, 0.35);
+  --washu-accent-shadow: rgba(92, 23, 100, 0.28);
+  --washu-accent-shadow-strong: rgba(92, 23, 100, 0.38);
+  --washu-info-shadow: rgba(0, 95, 158, 0.22);
+  --washu-info-shadow-strong: rgba(0, 95, 158, 0.32);
+  --washu-overlay: rgba(46, 45, 41, 0.6);
+  --washu-focus-ring: rgba(173, 0, 0, 0.25);
 }
 
 body,
 html {
   margin: 0;
   min-height: 100%;
-  background-color: #f1f5f9;
+  background-color: var(--washu-page);
+  color: var(--washu-text);
 }
 
 #root {
@@ -29,13 +62,13 @@ html {
   margin: 0;
   font-size: 2rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 .description {
   margin-top: 0.5rem;
   margin-bottom: 0;
-  color: #475569;
+  color: var(--washu-text-muted);
   max-width: 720px;
 }
 
@@ -48,22 +81,23 @@ html {
 
 fieldset {
   border-radius: 16px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   padding: 1.5rem;
-  background: #ffffff;
-  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+  background: var(--washu-surface);
+  box-shadow: 0 20px 45px var(--washu-shadow);
 }
 
 legend {
   font-weight: 600;
   font-size: 1rem;
   padding: 0 0.65rem;
+  color: var(--washu-accent);
 }
 
 .section-description {
   margin-top: 0.25rem;
   margin-bottom: 1.25rem;
-  color: #475569;
+  color: var(--washu-text-muted);
 }
 
 .radio-group {
@@ -77,20 +111,20 @@ legend {
   align-items: center;
   gap: 0.45rem;
   border-radius: 12px;
-  border: 1px solid transparent;
+  border: 1px solid var(--washu-border);
   padding: 0.55rem 0.95rem;
-  background: #f8fafc;
+  background: var(--washu-surface-muted);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .radio-option input[type="radio"] {
-  accent-color: #2563eb;
+  accent-color: var(--washu-primary);
 }
 
 .radio-option:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.15);
+  border-color: var(--washu-primary);
+  box-shadow: 0 6px 18px var(--washu-primary-shadow);
 }
 
 .input-stack {
@@ -107,12 +141,12 @@ legend {
 
 .input-stack label {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 .input-heading {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 textarea,
@@ -121,19 +155,19 @@ input[type="number"] {
   width: 100%;
   padding: 0.6rem 0.85rem;
   border-radius: 10px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   font-size: 0.95rem;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--washu-surface);
+  color: var(--washu-text);
 }
 
 textarea:focus,
 input[type="text"]:focus,
 input[type="number"]:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+  border-color: var(--washu-primary);
+  box-shadow: 0 0 0 3px var(--washu-focus-ring);
 }
 
 textarea {
@@ -164,28 +198,35 @@ button {
   font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
-  background: #2563eb;
+  background: var(--washu-primary);
   color: #ffffff;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.25);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  box-shadow: 0 14px 28px var(--washu-primary-shadow);
 }
 
 button.secondary {
-  background: #0f172a;
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.25);
+  background: var(--washu-accent);
+  box-shadow: 0 14px 28px var(--washu-accent-shadow);
 }
 
 button.ghost {
   background: transparent;
-  color: #1d4ed8;
-  border: 1px solid #93c5fd;
+  color: var(--washu-primary);
+  border: 1px solid var(--washu-primary-soft);
   box-shadow: none;
+}
+
+button.ghost:not(:disabled):hover {
+  background: var(--washu-primary-soft);
+  color: var(--washu-primary-dark);
+  box-shadow: none;
+  transform: none;
 }
 
 button.add-entry-button {
   align-self: flex-start;
-  background: #0ea5e9;
-  box-shadow: 0 14px 28px rgba(14, 165, 233, 0.2);
+  background: var(--washu-info);
+  box-shadow: 0 14px 28px var(--washu-info-shadow);
 }
 
 button:disabled {
@@ -197,30 +238,30 @@ button:disabled {
 
 button:not(:disabled):hover {
   transform: translateY(-1px);
-  box-shadow: 0 18px 32px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 18px 32px var(--washu-primary-shadow-strong);
 }
 
 button.secondary:not(:disabled):hover {
-  box-shadow: 0 18px 32px rgba(15, 23, 42, 0.35);
+  box-shadow: 0 18px 32px var(--washu-accent-shadow-strong);
 }
 
 button.add-entry-button:not(:disabled):hover {
-  box-shadow: 0 18px 32px rgba(14, 165, 233, 0.35);
+  box-shadow: 0 18px 32px var(--washu-info-shadow-strong);
 }
 
 .path-preview {
   font-size: 0.95rem;
-  color: #475569;
+  color: var(--washu-text-muted);
   word-break: break-all;
-  background: #f1f5f9;
-  border: 1px dashed #cbd5f5;
+  background: var(--washu-page-strong);
+  border: 1px dashed var(--washu-border);
   padding: 0.75rem;
   border-radius: 12px;
 }
 
 .preview-status {
   margin-top: 0.75rem;
-  color: #2563eb;
+  color: var(--washu-info);
   font-size: 0.9rem;
   font-weight: 500;
 }
@@ -229,15 +270,15 @@ button.add-entry-button:not(:disabled):hover {
   margin-top: 0.75rem;
   padding: 0.7rem 0.95rem;
   border-radius: 12px;
-  background: #fee2e2;
-  border: 1px solid #fca5a5;
-  color: #991b1b;
+  background: var(--washu-danger-soft);
+  border: 1px solid rgba(140, 28, 19, 0.4);
+  color: var(--washu-danger);
   font-size: 0.9rem;
 }
 
 .small-note {
   margin: 0;
-  color: #64748b;
+  color: var(--washu-text-muted);
   font-size: 0.825rem;
 }
 
@@ -248,8 +289,8 @@ button.add-entry-button:not(:disabled):hover {
   gap: 1rem;
   padding: 1rem;
   border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #cbd5f5;
+  background: var(--washu-surface-muted);
+  border: 1px solid var(--washu-border);
 }
 
 .column-selector-group {
@@ -261,7 +302,7 @@ button.add-entry-button:not(:disabled):hover {
 .column-selector h4 {
   margin: 0 0 0.35rem;
   font-size: 1rem;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 .column-checkbox-list {
@@ -275,17 +316,17 @@ button.add-entry-button:not(:disabled):hover {
   align-items: center;
   gap: 0.6rem;
   border-radius: 10px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   padding: 0.55rem 0.75rem;
-  background: #ffffff;
+  background: var(--washu-surface);
 }
 
 .column-checkbox-option input[type="checkbox"] {
-  accent-color: #2563eb;
+  accent-color: var(--washu-primary);
 }
 
 .column-checkbox-option span {
-  color: #0f172a;
+  color: var(--washu-heading);
   font-size: 0.9rem;
   line-height: 1.4;
 }
@@ -297,7 +338,7 @@ button.add-entry-button:not(:disabled):hover {
 .preview-table {
   width: 100%;
   border-collapse: collapse;
-  background: #ffffff;
+  background: var(--washu-surface);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -305,20 +346,20 @@ button.add-entry-button:not(:disabled):hover {
 .preview-table th,
 .preview-table td {
   padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid #cbd5f5;
+  border-bottom: 1px solid var(--washu-border);
   text-align: left;
   font-size: 0.85rem;
   vertical-align: top;
 }
 
 .preview-table th {
-  background: #e2e8f0;
+  background: var(--washu-page-strong);
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 .preview-table td {
-  color: #334155;
+  color: var(--washu-text);
   word-break: break-word;
   max-width: 320px;
 }
@@ -334,14 +375,14 @@ button.add-entry-button:not(:disabled):hover {
   margin-top: 1.1rem;
   padding: 0.75rem 0.9rem;
   border-radius: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--washu-surface-muted);
+  border: 1px solid var(--washu-border);
 }
 
 .checkbox-row input[type="checkbox"] {
   width: 1.1rem;
   height: 1.1rem;
-  accent-color: #2563eb;
+  accent-color: var(--washu-primary);
 }
 
 .number-row {
@@ -357,7 +398,7 @@ button.add-entry-button:not(:disabled):hover {
   flex-direction: column;
   gap: 0.5rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 .number-row input[type="number"] {
@@ -368,9 +409,9 @@ button.add-entry-button:not(:disabled):hover {
   margin-top: 1.75rem;
   padding: 1.4rem 1.6rem;
   border-radius: 18px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.1);
+  background: var(--washu-surface);
+  border: 1px solid var(--washu-border);
+  box-shadow: 0 20px 45px var(--washu-shadow);
 }
 
 .dataset-card-header {
@@ -388,7 +429,7 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-card-description {
   margin-top: 0.35rem;
   margin-bottom: 1.15rem;
-  color: #475569;
+  color: var(--washu-text-muted);
 }
 
 .dataset-status-pill {
@@ -401,18 +442,18 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .dataset-status-pill.ready {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--washu-accent-soft);
+  color: var(--washu-accent);
 }
 
 .dataset-status-pill.warning {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--washu-danger-soft);
+  color: var(--washu-danger);
 }
 
 .dataset-status-pill.loading {
-  background: #e0f2fe;
-  color: #0369a1;
+  background: var(--washu-info-soft);
+  color: var(--washu-info);
 }
 
 .dataset-meta-grid {
@@ -425,12 +466,12 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-meta-grid dt {
   margin: 0;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-heading);
 }
 
 .dataset-meta-grid dd {
   margin: 0.35rem 0 0;
-  color: #334155;
+  color: var(--washu-text);
   word-break: break-word;
 }
 
@@ -448,15 +489,15 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .dataset-message-info {
-  background: #e0f2fe;
-  color: #075985;
-  border: 1px solid #7dd3fc;
+  background: var(--washu-info-soft);
+  color: var(--washu-info);
+  border: 1px solid rgba(0, 95, 158, 0.35);
 }
 
 .dataset-message-error {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
+  background: var(--washu-danger-soft);
+  color: var(--washu-danger);
+  border: 1px solid rgba(140, 28, 19, 0.4);
 }
 
 .dataset-actions {
@@ -473,7 +514,7 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-preview-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.55);
+  background: var(--washu-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -486,11 +527,11 @@ button.add-entry-button:not(:disabled):hover {
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
-  background: #ffffff;
+  background: var(--washu-surface);
   border-radius: 18px;
-  box-shadow: 0 30px 60px rgba(15, 23, 42, 0.3);
+  box-shadow: 0 30px 60px var(--washu-shadow-strong);
   padding: 1.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--washu-border);
 }
 
 .dataset-preview-header {
@@ -515,7 +556,7 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .dataset-preview-card .small-note {
-  color: #475569;
+  color: var(--washu-text-muted);
 }
 
 .dataset-config-actions {
@@ -541,25 +582,25 @@ button.add-entry-button:not(:disabled):hover {
   align-items: flex-start;
   gap: 0.6rem;
   border-radius: 12px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   padding: 0.65rem 0.9rem;
-  background: #f8fafc;
+  background: var(--washu-surface-muted);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .checkbox-option:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.15);
+  border-color: var(--washu-primary);
+  box-shadow: 0 6px 18px var(--washu-primary-shadow);
 }
 
 .checkbox-option input[type="checkbox"] {
   margin-top: 0.15rem;
-  accent-color: #2563eb;
+  accent-color: var(--washu-primary);
 }
 
 .checkbox-option span {
-  color: #0f172a;
+  color: var(--washu-heading);
   font-size: 0.95rem;
   line-height: 1.4;
 }
@@ -569,34 +610,34 @@ button.add-entry-button:not(:disabled):hover {
   padding: 0.85rem 1.15rem;
   border-radius: 12px;
   font-weight: 500;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 14px 30px var(--washu-shadow);
 }
 
 .status-success {
-  background: #dcfce7;
-  color: #166534;
-  border: 1px solid #86efac;
+  background: var(--washu-accent-soft);
+  color: var(--washu-accent);
+  border: 1px solid rgba(92, 23, 100, 0.35);
 }
 
 .status-error {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
+  background: var(--washu-danger-soft);
+  color: var(--washu-danger);
+  border: 1px solid rgba(140, 28, 19, 0.4);
 }
 
 .status-info {
-  background: #e0f2fe;
-  color: #075985;
-  border: 1px solid #7dd3fc;
+  background: var(--washu-info-soft);
+  color: var(--washu-info);
+  border: 1px solid rgba(0, 95, 158, 0.35);
 }
 
 .result-card {
   margin-top: 2rem;
   padding: 1.5rem;
   border-radius: 18px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  background: var(--washu-surface);
+  border: 1px solid var(--washu-border);
+  box-shadow: 0 24px 60px var(--washu-shadow-strong);
 }
 
 .result-card h2 {
@@ -607,7 +648,7 @@ button.add-entry-button:not(:disabled):hover {
 .warning-list {
   margin: 0.75rem 0 0;
   padding-left: 1.25rem;
-  color: #b45309;
+  color: var(--washu-warning);
 }
 
 .detail-grid {
@@ -620,8 +661,8 @@ button.add-entry-button:not(:disabled):hover {
 .detail-card {
   padding: 0.95rem 1.05rem;
   border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--washu-surface-muted);
+  border: 1px solid var(--washu-border);
 }
 
 .detail-card h3 {
@@ -636,13 +677,13 @@ button.add-entry-button:not(:disabled):hover {
 
 .detail-card dt {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-heading);
   margin-top: 0.5rem;
 }
 
 .detail-card dd {
   margin: 0.15rem 0 0;
-  color: #334155;
+  color: var(--washu-text-muted);
 }
 
 .path-list {
@@ -660,8 +701,8 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .prompt-preview {
-  background: #1e293b;
-  color: #f8fafc;
+  background: var(--washu-accent);
+  color: #fdf6ff;
   padding: 1rem;
   border-radius: 12px;
   white-space: pre-wrap;
@@ -673,7 +714,7 @@ button.add-entry-button:not(:disabled):hover {
 .faculty-table {
   width: 100%;
   border-collapse: collapse;
-  background: #ffffff;
+  background: var(--washu-surface);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -681,9 +722,18 @@ button.add-entry-button:not(:disabled):hover {
 .faculty-table th,
 .faculty-table td {
   padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid #cbd5f5;
+  border-bottom: 1px solid var(--washu-border);
   text-align: left;
   font-size: 0.9rem;
+}
+
+.faculty-table th {
+  background: var(--washu-page-strong);
+  color: var(--washu-heading);
+}
+
+.faculty-table td {
+  color: var(--washu-text);
 }
 
 .faculty-table tbody tr:last-child td {
@@ -692,15 +742,15 @@ button.add-entry-button:not(:disabled):hover {
 
 .remove-button {
   background: transparent;
-  color: #dc2626;
-  border: 1px solid #fca5a5;
+  color: var(--washu-danger);
+  border: 1px solid rgba(140, 28, 19, 0.4);
   padding: 0.55rem 0.9rem;
   border-radius: 10px;
   font-weight: 600;
 }
 
 .remove-button:hover {
-  background: #fee2e2;
+  background: var(--washu-danger-soft);
   box-shadow: none;
   transform: none;
 }
@@ -734,194 +784,30 @@ button.add-entry-button:not(:disabled):hover {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    background-color: #0f172a;
-    color: #e2e8f0;
-  }
-
-  body,
-  html {
-    background-color: #0f172a;
-  }
-
-  fieldset {
-    background: #1e293b;
-    border-color: #334155;
-    box-shadow: 0 20px 45px rgba(15, 23, 42, 0.4);
-  }
-
-  .section-description,
-  .description {
-    color: #cbd5f5;
-  }
-
-  .page-header h1 {
-    color: #f8fafc;
-  }
-
-  .input-heading,
-  .number-row label {
-    color: #e2e8f0;
-  }
-
-  .input-stack label {
-    color: #e2e8f0;
-  }
-
-  textarea,
-  input[type="text"],
-  input[type="number"] {
-    background: #0f172a;
-    color: #e2e8f0;
-    border-color: #334155;
-  }
-
-  .radio-option {
-    background: #111827;
-    border-color: #1f2937;
-  }
-
-  .checkbox-option {
-    background: #111827;
-    border-color: #1f2937;
-  }
-
-  .checkbox-option:hover {
-    border-color: #2563eb;
-  }
-
-  .checkbox-option span {
-    color: #e2e8f0;
-  }
-
-  .path-preview {
-    background: #111827;
-    border-color: #1f2937;
-    color: #cbd5f5;
-  }
-
-  .preview-status {
-    color: #93c5fd;
-  }
-
-  .preview-error {
-    background: #7f1d1d;
-    border-color: #dc2626;
-    color: #fee2e2;
-  }
-
-  .checkbox-row {
-    background: #111827;
-    border-color: #1f2937;
-  }
-
-  .detail-card {
-    background: #111827;
-    border-color: #1f2937;
-  }
-
-  .spreadsheet-preview-card {
-    background: #111827;
-    border-color: #1f2937;
-  }
-
-  .column-checkbox-option {
-    background: #0f172a;
-    border-color: #1f2937;
-  }
-
-  .column-checkbox-option span {
-    color: #e2e8f0;
-  }
-
-  .preview-table {
-    background: #0f172a;
-  }
-
-  .preview-table th {
-    background: #1f2937;
-    color: #f8fafc;
-  }
-
-  .preview-table td {
-    color: #cbd5f5;
-  }
-
-  .result-card {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.65);
-  }
-
-  .prompt-preview {
-    background: #0b1120;
-  }
-
-  button.secondary {
-    background: #1d4ed8;
-  }
-
-  button.ghost {
-    color: #93c5fd;
-    border-color: #1d4ed8;
-  }
-
-  .dataset-card {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.65);
-  }
-
-  .dataset-card-description {
-    color: #cbd5f5;
-  }
-
-  .dataset-meta-grid dt {
-    color: #e2e8f0;
-  }
-
-  .dataset-meta-grid dd {
-    color: #cbd5f5;
-  }
-
-  .dataset-status-pill.ready {
-    background: rgba(22, 101, 52, 0.25);
-    color: #bbf7d0;
-  }
-
-  .dataset-status-pill.warning {
-    background: rgba(185, 28, 28, 0.2);
-    color: #fecaca;
-  }
-
-  .dataset-status-pill.loading {
-    background: rgba(3, 105, 161, 0.2);
-    color: #bae6fd;
-  }
-
-  .dataset-message-info {
-    background: rgba(14, 165, 233, 0.18);
-    border-color: rgba(56, 189, 248, 0.35);
-    color: #bae6fd;
-  }
-
-  .dataset-message-error {
-    background: rgba(220, 38, 38, 0.22);
-    border-color: rgba(248, 113, 113, 0.35);
-    color: #fecaca;
-  }
-
-  .dataset-preview-dialog {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 30px 70px rgba(2, 6, 23, 0.7);
-  }
-
-  .dataset-preview-card {
-    background: #111827;
-    border-color: #1f2937;
-  }
-
-  .dataset-preview-card .small-note {
-    color: #cbd5f5;
+    --washu-page: #1d1417;
+    --washu-page-strong: #27191d;
+    --washu-surface: #2f2026;
+    --washu-surface-muted: #39252c;
+    --washu-border: rgba(244, 215, 215, 0.22);
+    --washu-border-strong: rgba(244, 215, 215, 0.32);
+    --washu-text: #f9f1ec;
+    --washu-heading: #fff7f3;
+    --washu-text-muted: #dbc5bd;
+    --washu-primary-soft: rgba(173, 0, 0, 0.35);
+    --washu-accent-soft: rgba(92, 23, 100, 0.35);
+    --washu-info-soft: rgba(0, 95, 158, 0.4);
+    --washu-warning-soft: rgba(180, 83, 9, 0.38);
+    --washu-danger-soft: rgba(140, 28, 19, 0.42);
+    --washu-shadow-soft: rgba(0, 0, 0, 0.4);
+    --washu-shadow: rgba(0, 0, 0, 0.5);
+    --washu-shadow-strong: rgba(0, 0, 0, 0.6);
+    --washu-primary-shadow: rgba(173, 0, 0, 0.45);
+    --washu-primary-shadow-strong: rgba(173, 0, 0, 0.55);
+    --washu-accent-shadow: rgba(92, 23, 100, 0.5);
+    --washu-accent-shadow-strong: rgba(92, 23, 100, 0.6);
+    --washu-info-shadow: rgba(0, 95, 158, 0.45);
+    --washu-info-shadow-strong: rgba(0, 95, 158, 0.55);
+    --washu-overlay: rgba(12, 10, 11, 0.72);
+    --washu-focus-ring: rgba(255, 140, 140, 0.3);
   }
 }
