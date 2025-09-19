@@ -15,6 +15,7 @@ const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
 const FACULTY_DATASET_EXTENSIONS: &[&str] = &["tsv", "txt", "xlsx", "xls"];
 const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
 const FACULTY_DATASET_METADATA_NAME: &str = "faculty_dataset_metadata.json";
+const FACULTY_DATASET_SOURCE_NAME: &str = "faculty_dataset_source.txt";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +121,7 @@ struct FacultyDatasetPreviewResponse {
 struct FacultyDatasetStatus {
     path: Option<String>,
     canonical_path: Option<String>,
+    source_path: Option<String>,
     last_modified: Option<String>,
     row_count: Option<usize>,
     column_count: Option<usize>,
@@ -374,6 +376,8 @@ fn replace_faculty_dataset(
     fs::copy(&source, &destination)
         .map_err(|err| format!("Unable to replace the faculty dataset: {err}"))?;
 
+    write_faculty_dataset_source_path(&app_handle, &source)?;
+
     let mut status =
         build_faculty_dataset_status_with_overrides(&app_handle, configuration.as_ref())?;
     if status.message.is_none() {
@@ -402,6 +406,8 @@ fn restore_default_faculty_dataset(
     }
     fs::write(&destination, DEFAULT_FACULTY_DATASET)
         .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
+
+    let _ = clear_faculty_dataset_source_path(&app_handle);
 
     let mut status = build_faculty_dataset_status(&app_handle)?;
     if status.message.is_none() {
@@ -659,6 +665,7 @@ fn build_faculty_dataset_status_with_overrides(
     let mut status = FacultyDatasetStatus {
         path: Some(dataset_path.to_string_lossy().into_owned()),
         canonical_path: None,
+        source_path: None,
         last_modified: None,
         row_count: None,
         column_count: None,
@@ -672,6 +679,7 @@ fn build_faculty_dataset_status_with_overrides(
 
     if !dataset_path.exists() {
         let _ = clear_faculty_dataset_metadata(app_handle);
+        let _ = clear_faculty_dataset_source_path(app_handle);
         status.message = Some(
             "No faculty dataset has been configured. Restore the default file to continue.".into(),
         );
@@ -683,6 +691,18 @@ fn build_faculty_dataset_status_with_overrides(
         .canonicalize()
         .ok()
         .map(|path| path.to_string_lossy().into_owned());
+
+    match read_faculty_dataset_source_path(app_handle) {
+        Ok(source_path) => {
+            status.source_path = source_path;
+        }
+        Err(err) => {
+            if status.message.is_none() {
+                status.message = Some(err);
+                status.message_variant = Some("error".into());
+            }
+        }
+    }
 
     let metadata = fs::metadata(&dataset_path)
         .map_err(|err| format!("Unable to inspect the faculty dataset: {err}"))?;
@@ -1031,6 +1051,54 @@ fn clear_faculty_dataset_metadata(app_handle: &tauri::AppHandle) -> Result<(), S
     if path.exists() {
         fs::remove_file(&path)
             .map_err(|err| format!("Unable to clear faculty dataset metadata: {err}"))?;
+    }
+    Ok(())
+}
+
+fn dataset_source_record_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = dataset_directory(app_handle)?;
+    Ok(directory.join(FACULTY_DATASET_SOURCE_NAME))
+}
+
+fn write_faculty_dataset_source_path(
+    app_handle: &tauri::AppHandle,
+    source: &Path,
+) -> Result<(), String> {
+    let record_path = dataset_source_record_path(app_handle)?;
+    ensure_dataset_directory(&record_path)?;
+    let canonical = source
+        .canonicalize()
+        .unwrap_or_else(|_| source.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    fs::write(&record_path, canonical)
+        .map_err(|err| format!("Unable to record the faculty dataset source path: {err}"))?;
+    Ok(())
+}
+
+fn read_faculty_dataset_source_path(
+    app_handle: &tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    let record_path = dataset_source_record_path(app_handle)?;
+    if !record_path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&record_path)
+        .map_err(|err| format!("Unable to read the faculty dataset source path: {err}"))?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+fn clear_faculty_dataset_source_path(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    let record_path = dataset_source_record_path(app_handle)?;
+    if record_path.exists() {
+        fs::remove_file(&record_path)
+            .map_err(|err| format!("Unable to clear the faculty dataset source path: {err}"))?;
     }
     Ok(())
 }
