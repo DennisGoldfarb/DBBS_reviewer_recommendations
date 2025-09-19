@@ -193,7 +193,7 @@ function App() {
         filters: [
           {
             name: "Faculty dataset",
-            extensions: ["tsv", "txt"],
+            extensions: ["tsv", "txt", "xlsx", "xls"],
           },
         ],
       });
@@ -1008,8 +1008,8 @@ function App() {
               </span>
             </div>
             <p className="dataset-card-description">
-              Manage the TSV that seeds the faculty embedding index before
-              running updates.
+              Manage the dataset file that seeds the faculty embedding index
+              before running updates.
             </p>
             <dl className="dataset-meta-grid">
               <div>
@@ -1293,7 +1293,7 @@ function App() {
               <div className="spreadsheet-preview-card dataset-preview-card">
                 <p className="small-note">
                   Showing the first {datasetStatus.preview.rows.length} rows of
-                  the active TSV.
+                  the active dataset file.
                 </p>
                 <div className="preview-table-wrapper">
                   <table className="preview-table">

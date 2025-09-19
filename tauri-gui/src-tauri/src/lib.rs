@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tauri::Manager;
 
-const FACULTY_DATASET_FILENAME: &str = "faculty_dataset.tsv";
+const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
+const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
+const FACULTY_DATASET_EXTENSIONS: &[&str] = &["tsv", "txt", "xlsx", "xls"];
 const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -271,23 +273,28 @@ fn replace_faculty_dataset(
 ) -> Result<FacultyDatasetStatus, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("Select a TSV or TXT file to import for the faculty dataset.".into());
+        return Err("Select a TSV, TXT, or Excel file to import for the faculty dataset.".into());
     }
 
     let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty dataset file")?;
 
-    match source.extension().and_then(|ext| ext.to_str()) {
-        Some(ext)
-            if ext.eq_ignore_ascii_case("tsv") || ext.eq_ignore_ascii_case("txt") => {}
-        _ => {
-            return Err(
-                "Select a tab-delimited .tsv or .txt file to replace the faculty dataset.".into(),
-            )
-        }
+    let extension = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if !FACULTY_DATASET_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(
+            "Select a tab-delimited .tsv or .txt file, or an Excel workbook (.xlsx or .xls) to replace the faculty dataset.".into(),
+        );
     }
 
-    let destination = dataset_destination(&app_handle)?;
+    let destination = dataset_destination_for_extension(&app_handle, &extension)?;
     ensure_dataset_directory(&destination)?;
+    if let Some(directory) = destination.parent() {
+        remove_other_dataset_variants(directory, &extension)?;
+    }
     fs::copy(&source, &destination)
         .map_err(|err| format!("Unable to replace the faculty dataset: {err}"))?;
 
@@ -310,8 +317,12 @@ fn replace_faculty_dataset(
 fn restore_default_faculty_dataset(
     app_handle: tauri::AppHandle,
 ) -> Result<FacultyDatasetStatus, String> {
-    let destination = dataset_destination(&app_handle)?;
+    let destination =
+        dataset_destination_for_extension(&app_handle, FACULTY_DATASET_DEFAULT_EXTENSION)?;
     ensure_dataset_directory(&destination)?;
+    if let Some(directory) = destination.parent() {
+        remove_other_dataset_variants(directory, FACULTY_DATASET_DEFAULT_EXTENSION)?;
+    }
     fs::write(&destination, DEFAULT_FACULTY_DATASET)
         .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
 
@@ -574,7 +585,18 @@ fn build_faculty_dataset_status(
         .map_err(|err| format!("Unable to read the faculty dataset: {err}"))?;
     status.is_default = bytes == DEFAULT_FACULTY_DATASET;
 
-    match compute_tsv_dimensions(&bytes) {
+    let extension = dataset_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let dimensions = match extension.as_str() {
+        "xlsx" | "xls" => compute_excel_dimensions(&dataset_path),
+        _ => compute_tsv_dimensions(&bytes),
+    };
+
+    match dimensions {
         Ok((rows, columns)) => {
             status.row_count = Some(rows);
             status.column_count = Some(columns);
@@ -606,11 +628,53 @@ fn build_faculty_dataset_status(
 }
 
 fn dataset_destination(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let base = app_handle
+    let directory = dataset_directory(app_handle)?;
+    for extension in FACULTY_DATASET_EXTENSIONS {
+        let candidate = dataset_path_with_extension(&directory, extension);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Ok(dataset_path_with_extension(
+        &directory,
+        FACULTY_DATASET_DEFAULT_EXTENSION,
+    ))
+}
+
+fn dataset_destination_for_extension(
+    app_handle: &tauri::AppHandle,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    let directory = dataset_directory(app_handle)?;
+    Ok(dataset_path_with_extension(&directory, extension))
+}
+
+fn dataset_directory(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
         .path()
         .app_data_dir()
-        .map_err(|err| format!("Unable to resolve the application data directory: {err}"))?;
-    Ok(base.join(FACULTY_DATASET_FILENAME))
+        .map_err(|err| format!("Unable to resolve the application data directory: {err}"))
+}
+
+fn dataset_path_with_extension(directory: &Path, extension: &str) -> PathBuf {
+    directory.join(format!("{}.{}", FACULTY_DATASET_BASENAME, extension))
+}
+
+fn remove_other_dataset_variants(directory: &Path, keep_extension: &str) -> Result<(), String> {
+    for extension in FACULTY_DATASET_EXTENSIONS {
+        if extension.eq_ignore_ascii_case(keep_extension) {
+            continue;
+        }
+
+        let candidate = dataset_path_with_extension(directory, extension);
+        if candidate.exists() {
+            fs::remove_file(&candidate)
+                .map_err(|err| format!("Unable to remove a previous faculty dataset: {err}"))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn ensure_dataset_directory(path: &Path) -> Result<(), String> {
@@ -645,8 +709,40 @@ fn compute_tsv_dimensions(data: &[u8]) -> Result<(usize, usize), String> {
     Ok((row_count, headers.len()))
 }
 
+fn compute_excel_dimensions(path: &Path) -> Result<(usize, usize), String> {
+    let mut workbook =
+        open_workbook_auto(path).map_err(|err| format!("Unable to open the dataset: {err}"))?;
+
+    let sheet_name = workbook
+        .sheet_names()
+        .get(0)
+        .cloned()
+        .ok_or_else(|| "The workbook does not contain any worksheets.".to_string())?;
+
+    let range = workbook
+        .worksheet_range(&sheet_name)
+        .ok_or_else(|| format!("Unable to read the worksheet named '{sheet_name}'."))?
+        .map_err(|err| format!("Unable to read the worksheet data: {err}"))?;
+
+    let mut rows_iter = range.rows();
+    let header_row = rows_iter
+        .next()
+        .ok_or_else(|| "The worksheet is empty.".to_string())?;
+
+    let column_count = header_row.len();
+    let mut row_count = 0usize;
+
+    for row in rows_iter {
+        if row.iter().any(|cell| !cell_to_string(cell).is_empty()) {
+            row_count += 1;
+        }
+    }
+
+    Ok((row_count, column_count))
+}
+
 fn build_dataset_preview(path: &Path) -> Result<SpreadsheetPreview, String> {
-    let (mut headers, mut rows) = read_delimited_spreadsheet(path)?;
+    let (mut headers, mut rows) = read_spreadsheet(path)?;
     align_row_lengths(&mut headers, &mut rows);
     let (prompt_columns, identifier_columns) = suggest_spreadsheet_columns(&headers, &rows);
 
