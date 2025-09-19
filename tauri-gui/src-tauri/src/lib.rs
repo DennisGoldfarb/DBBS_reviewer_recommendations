@@ -176,7 +176,16 @@ struct FacultyProgramMembership {
 }
 
 #[tauri::command]
-fn submit_matching_request(
+async fn submit_matching_request(
+    app_handle: tauri::AppHandle,
+    payload: SubmissionPayload,
+) -> Result<SubmissionResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || perform_matching_request(app_handle, payload))
+        .await
+        .map_err(|err| format!("Matching task failed: {err}"))?
+}
+
+fn perform_matching_request(
     app_handle: tauri::AppHandle,
     payload: SubmissionPayload,
 ) -> Result<SubmissionResponse, String> {
