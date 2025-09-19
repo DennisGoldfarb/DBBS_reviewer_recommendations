@@ -765,10 +765,6 @@ function App() {
       <main>
         <header className="page-header">
           <h1>DBBS Faculty Recommendation Console</h1>
-          <p className="description">
-            Configure matching runs, narrow the faculty roster, and track the
-            options that will be sent to the matching backend.
-          </p>
         </header>
 
         <form className="matching-form" onSubmit={handleSubmit}>
