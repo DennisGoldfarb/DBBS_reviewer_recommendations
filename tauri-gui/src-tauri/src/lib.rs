@@ -1,11 +1,19 @@
 use calamine::{open_workbook_auto, DataType, Reader};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+use tauri::Manager;
+
+const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
+const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
+const FACULTY_DATASET_EXTENSIONS: &[&str] = &["tsv", "txt", "xlsx", "xls"];
+const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -90,13 +98,28 @@ struct SubmissionResponse {
     details: SubmissionDetails,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SpreadsheetPreview {
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
     suggested_prompt_columns: Vec<usize>,
     suggested_identifier_columns: Vec<usize>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyDatasetStatus {
+    path: Option<String>,
+    canonical_path: Option<String>,
+    last_modified: Option<String>,
+    row_count: Option<usize>,
+    column_count: Option<usize>,
+    is_valid: bool,
+    is_default: bool,
+    message: Option<String>,
+    message_variant: Option<String>,
+    preview: Option<SpreadsheetPreview>,
 }
 
 #[tauri::command]
@@ -237,6 +260,88 @@ fn update_faculty_embeddings() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_faculty_dataset_status(
+    app_handle: tauri::AppHandle,
+) -> Result<FacultyDatasetStatus, String> {
+    build_faculty_dataset_status(&app_handle)
+}
+
+#[tauri::command]
+fn replace_faculty_dataset(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<FacultyDatasetStatus, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a TSV, TXT, or Excel file to import for the faculty dataset.".into());
+    }
+
+    let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty dataset file")?;
+
+    let extension = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if !FACULTY_DATASET_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(
+            "Select a tab-delimited .tsv or .txt file, or an Excel workbook (.xlsx or .xls) to replace the faculty dataset.".into(),
+        );
+    }
+
+    let destination = dataset_destination_for_extension(&app_handle, &extension)?;
+    ensure_dataset_directory(&destination)?;
+    if let Some(directory) = destination.parent() {
+        remove_other_dataset_variants(directory, &extension)?;
+    }
+    fs::copy(&source, &destination)
+        .map_err(|err| format!("Unable to replace the faculty dataset: {err}"))?;
+
+    let mut status = build_faculty_dataset_status(&app_handle)?;
+    if status.message.is_none() {
+        status.message = Some("Faculty dataset replaced successfully.".into());
+        status.message_variant = Some("success".into());
+    } else if status.message_variant.is_none() {
+        status.message_variant = Some(if status.is_valid {
+            "success".into()
+        } else {
+            "error".into()
+        });
+    }
+
+    Ok(status)
+}
+
+#[tauri::command]
+fn restore_default_faculty_dataset(
+    app_handle: tauri::AppHandle,
+) -> Result<FacultyDatasetStatus, String> {
+    let destination =
+        dataset_destination_for_extension(&app_handle, FACULTY_DATASET_DEFAULT_EXTENSION)?;
+    ensure_dataset_directory(&destination)?;
+    if let Some(directory) = destination.parent() {
+        remove_other_dataset_variants(directory, FACULTY_DATASET_DEFAULT_EXTENSION)?;
+    }
+    fs::write(&destination, DEFAULT_FACULTY_DATASET)
+        .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
+
+    let mut status = build_faculty_dataset_status(&app_handle)?;
+    if status.message.is_none() {
+        status.message = Some("Faculty dataset reset to the packaged default.".into());
+        status.message_variant = Some("success".into());
+    } else if status.message_variant.is_none() {
+        status.message_variant = Some(if status.is_valid {
+            "success".into()
+        } else {
+            "error".into()
+        });
+    }
+
+    Ok(status)
+}
+
+#[tauri::command]
 fn analyze_spreadsheet(path: String) -> Result<SpreadsheetPreview, String> {
     if path.trim().is_empty() {
         return Err("Provide a spreadsheet path to analyze.".into());
@@ -326,7 +431,7 @@ fn read_delimited_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<Strin
     let mut rows = Vec::new();
     for record in reader.records() {
         let record = record.map_err(|err| format!("Unable to read spreadsheet rows: {err}"))?;
-        let mut values: Vec<String> = record
+        let values: Vec<String> = record
             .iter()
             .map(|value| value.trim().to_string())
             .collect();
@@ -367,7 +472,7 @@ fn read_excel_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>)
     let mut rows = Vec::new();
 
     for row in rows_iter {
-        let mut values: Vec<String> = row.iter().map(cell_to_string).collect();
+        let values: Vec<String> = row.iter().map(cell_to_string).collect();
         if values.iter().all(|value| value.is_empty()) {
             continue;
         }
@@ -440,6 +545,218 @@ fn detect_delimiter(path: &Path) -> Result<u8, String> {
     }
 
     Ok(b'\t')
+}
+
+fn build_faculty_dataset_status(
+    app_handle: &tauri::AppHandle,
+) -> Result<FacultyDatasetStatus, String> {
+    let dataset_path = dataset_destination(app_handle)?;
+    let mut status = FacultyDatasetStatus {
+        path: Some(dataset_path.to_string_lossy().into_owned()),
+        canonical_path: None,
+        last_modified: None,
+        row_count: None,
+        column_count: None,
+        is_valid: false,
+        is_default: false,
+        message: None,
+        message_variant: None,
+        preview: None,
+    };
+
+    if !dataset_path.exists() {
+        status.message = Some(
+            "No faculty dataset has been configured. Restore the default file to continue.".into(),
+        );
+        status.message_variant = Some("info".into());
+        return Ok(status);
+    }
+
+    status.canonical_path = dataset_path
+        .canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+
+    let metadata = fs::metadata(&dataset_path)
+        .map_err(|err| format!("Unable to inspect the faculty dataset: {err}"))?;
+    status.last_modified = metadata.modified().ok().map(format_system_time);
+
+    let bytes = fs::read(&dataset_path)
+        .map_err(|err| format!("Unable to read the faculty dataset: {err}"))?;
+    status.is_default = bytes == DEFAULT_FACULTY_DATASET;
+
+    let extension = dataset_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let dimensions = match extension.as_str() {
+        "xlsx" | "xls" => compute_excel_dimensions(&dataset_path),
+        _ => compute_tsv_dimensions(&bytes),
+    };
+
+    match dimensions {
+        Ok((rows, columns)) => {
+            status.row_count = Some(rows);
+            status.column_count = Some(columns);
+            status.is_valid = rows > 0 && columns > 0;
+            if !status.is_valid {
+                status.message = Some("The faculty dataset does not contain any data rows.".into());
+                status.message_variant = Some("error".into());
+            }
+        }
+        Err(err) => {
+            status.message = Some(err);
+            status.message_variant = Some("error".into());
+        }
+    }
+
+    match build_dataset_preview(&dataset_path) {
+        Ok(preview) => {
+            status.preview = Some(preview);
+        }
+        Err(err) => {
+            if status.message.is_none() {
+                status.message = Some(err);
+                status.message_variant = Some("error".into());
+            }
+        }
+    }
+
+    Ok(status)
+}
+
+fn dataset_destination(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = dataset_directory(app_handle)?;
+    for extension in FACULTY_DATASET_EXTENSIONS {
+        let candidate = dataset_path_with_extension(&directory, extension);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Ok(dataset_path_with_extension(
+        &directory,
+        FACULTY_DATASET_DEFAULT_EXTENSION,
+    ))
+}
+
+fn dataset_destination_for_extension(
+    app_handle: &tauri::AppHandle,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    let directory = dataset_directory(app_handle)?;
+    Ok(dataset_path_with_extension(&directory, extension))
+}
+
+fn dataset_directory(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Unable to resolve the application data directory: {err}"))
+}
+
+fn dataset_path_with_extension(directory: &Path, extension: &str) -> PathBuf {
+    directory.join(format!("{}.{}", FACULTY_DATASET_BASENAME, extension))
+}
+
+fn remove_other_dataset_variants(directory: &Path, keep_extension: &str) -> Result<(), String> {
+    for extension in FACULTY_DATASET_EXTENSIONS {
+        if extension.eq_ignore_ascii_case(keep_extension) {
+            continue;
+        }
+
+        let candidate = dataset_path_with_extension(directory, extension);
+        if candidate.exists() {
+            fs::remove_file(&candidate)
+                .map_err(|err| format!("Unable to remove a previous faculty dataset: {err}"))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_dataset_directory(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("Unable to prepare the faculty dataset directory: {err}"))?;
+    }
+    Ok(())
+}
+
+fn compute_tsv_dimensions(data: &[u8]) -> Result<(usize, usize), String> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .flexible(true)
+        .from_reader(Cursor::new(data));
+
+    let headers = reader
+        .headers()
+        .map_err(|err| format!("Unable to read the faculty dataset headers: {err}"))?
+        .clone();
+
+    let mut row_count = 0usize;
+    for record in reader.records() {
+        let record =
+            record.map_err(|err| format!("Unable to read the faculty dataset rows: {err}"))?;
+        if record.iter().any(|value| !value.trim().is_empty()) {
+            row_count += 1;
+        }
+    }
+
+    Ok((row_count, headers.len()))
+}
+
+fn compute_excel_dimensions(path: &Path) -> Result<(usize, usize), String> {
+    let mut workbook =
+        open_workbook_auto(path).map_err(|err| format!("Unable to open the dataset: {err}"))?;
+
+    let sheet_name = workbook
+        .sheet_names()
+        .get(0)
+        .cloned()
+        .ok_or_else(|| "The workbook does not contain any worksheets.".to_string())?;
+
+    let range = workbook
+        .worksheet_range(&sheet_name)
+        .ok_or_else(|| format!("Unable to read the worksheet named '{sheet_name}'."))?
+        .map_err(|err| format!("Unable to read the worksheet data: {err}"))?;
+
+    let mut rows_iter = range.rows();
+    let header_row = rows_iter
+        .next()
+        .ok_or_else(|| "The worksheet is empty.".to_string())?;
+
+    let column_count = header_row.len();
+    let mut row_count = 0usize;
+
+    for row in rows_iter {
+        if row.iter().any(|cell| !cell_to_string(cell).is_empty()) {
+            row_count += 1;
+        }
+    }
+
+    Ok((row_count, column_count))
+}
+
+fn build_dataset_preview(path: &Path) -> Result<SpreadsheetPreview, String> {
+    let (mut headers, mut rows) = read_spreadsheet(path)?;
+    align_row_lengths(&mut headers, &mut rows);
+    let (prompt_columns, identifier_columns) = suggest_spreadsheet_columns(&headers, &rows);
+
+    Ok(SpreadsheetPreview {
+        headers,
+        rows,
+        suggested_prompt_columns: prompt_columns,
+        suggested_identifier_columns: identifier_columns,
+    })
+}
+
+fn format_system_time(time: SystemTime) -> String {
+    let datetime: DateTime<Utc> = time.into();
+    datetime.to_rfc3339()
 }
 
 fn suggest_spreadsheet_columns(
@@ -787,7 +1104,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             submit_matching_request,
             update_faculty_embeddings,
-            analyze_spreadsheet
+            analyze_spreadsheet,
+            get_faculty_dataset_status,
+            replace_faculty_dataset,
+            restore_default_faculty_dataset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
