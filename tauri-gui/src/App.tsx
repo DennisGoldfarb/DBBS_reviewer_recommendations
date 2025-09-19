@@ -193,7 +193,7 @@ function App() {
         filters: [
           {
             name: "Faculty dataset",
-            extensions: ["tsv"],
+            extensions: ["tsv", "txt"],
           },
         ],
       });

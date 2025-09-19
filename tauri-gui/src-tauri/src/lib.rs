@@ -271,14 +271,19 @@ fn replace_faculty_dataset(
 ) -> Result<FacultyDatasetStatus, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("Select a TSV file to import for the faculty dataset.".into());
+        return Err("Select a TSV or TXT file to import for the faculty dataset.".into());
     }
 
-    let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty dataset TSV")?;
+    let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty dataset file")?;
 
     match source.extension().and_then(|ext| ext.to_str()) {
-        Some(ext) if ext.eq_ignore_ascii_case("tsv") => {}
-        _ => return Err("Select a tab-delimited .tsv file to replace the faculty dataset.".into()),
+        Some(ext)
+            if ext.eq_ignore_ascii_case("tsv") || ext.eq_ignore_ascii_case("txt") => {}
+        _ => {
+            return Err(
+                "Select a tab-delimited .tsv or .txt file to replace the faculty dataset.".into(),
+            )
+        }
     }
 
     let destination = dataset_destination(&app_handle)?;
