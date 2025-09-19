@@ -678,6 +678,112 @@ function App() {
     }
   };
 
+  const SUPPORTED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "txt"] as const;
+
+  const normalizeDroppedDocumentPath = (raw: string | null | undefined) => {
+    if (!raw) {
+      return null;
+    }
+
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const decode = (value: string) => {
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    };
+
+    if (/^file:\/\//i.test(trimmed)) {
+      try {
+        const url = new URL(trimmed);
+        const host = url.host ? decode(url.host) : "";
+        let path = decode(url.pathname ?? "");
+        if (host) {
+          path = `//${host}${path}`;
+        }
+        if (/^\/[A-Za-z]:/.test(path)) {
+          path = path.slice(1);
+        }
+        return path.length > 0 ? path : null;
+      } catch {
+        const withoutScheme = trimmed.replace(/^file:\/\//i, "");
+        const decoded = decode(withoutScheme);
+        return decoded.length > 0 ? decoded : null;
+      }
+    }
+
+    const decoded = decode(trimmed);
+    return decoded.length > 0 ? decoded : null;
+  };
+
+  const extractDocumentPathFromDrop = (
+    event: DragEvent<HTMLDivElement>,
+  ): string | null => {
+    const transfer = event.dataTransfer;
+    if (!transfer) {
+      return null;
+    }
+
+    const files = transfer.files;
+    if (files && files.length > 0) {
+      const file = files[0] as File & { path?: string };
+      if (file.path) {
+        const normalized = normalizeDroppedDocumentPath(file.path);
+        if (normalized) {
+          return normalized;
+        }
+      }
+    }
+
+    const gatherCandidates = (value: string, skipComments = false) => {
+      if (!value) {
+        return [] as string[];
+      }
+      return value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && (!skipComments || !line.startsWith("#")));
+    };
+
+    const safeGetData = (type: string) => {
+      try {
+        return transfer.getData(type);
+      } catch {
+        return "";
+      }
+    };
+
+    const uriCandidates = gatherCandidates(safeGetData("text/uri-list"), true);
+    for (const candidate of uriCandidates) {
+      const normalized = normalizeDroppedDocumentPath(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    const plainCandidates = gatherCandidates(safeGetData("text/plain"));
+    for (const candidate of plainCandidates) {
+      const normalized = normalizeDroppedDocumentPath(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return null;
+  };
+
+  const isSupportedDocumentPath = (value: string) => {
+    const lower = value.toLowerCase();
+    return SUPPORTED_DOCUMENT_EXTENSIONS.some((extension) =>
+      lower.endsWith(`.${extension}`),
+    );
+  };
+
   const handleDocumentPathChange = (value: string) => {
     setDocumentPath(value);
     setError(null);
@@ -686,17 +792,20 @@ function App() {
 
   const handleDocumentDragEnter = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     setIsDocumentDragActive(true);
   };
 
   const handleDocumentDragOver = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
     setIsDocumentDragActive(true);
   };
 
   const handleDocumentDragLeave = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     const nextTarget = event.relatedTarget as Node | null;
     if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
       setIsDocumentDragActive(false);
@@ -705,22 +814,25 @@ function App() {
 
   const handleDocumentDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     setIsDocumentDragActive(false);
 
-    const files = event.dataTransfer?.files;
-    if (!files || files.length === 0) {
+    const droppedPath = extractDocumentPathFromDrop(event);
+    if (!droppedPath) {
+      setError(
+        "Unable to access the dropped file path. Use the Browse button to select the document instead.",
+      );
       return;
     }
 
-    const file = files[0] as File & { path?: string };
-    if (file.path && file.path.trim().length > 0) {
-      handleDocumentPathChange(file.path);
+    if (!isSupportedDocumentPath(droppedPath)) {
+      setError(
+        "The dropped file is not a supported format. Choose a PDF, Word document, or plain text file.",
+      );
       return;
     }
 
-    setError(
-      "Unable to access the dropped file path. Use the Browse button to select the document instead.",
-    );
+    handleDocumentPathChange(droppedPath);
   };
 
   const handleSpreadsheetPathInput = (value: string) => {
