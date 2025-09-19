@@ -64,10 +64,22 @@ interface SubmissionDetails {
   spreadsheetIdentifierColumns: string[];
 }
 
+interface FacultyMatchResult {
+  rowIndex: number;
+  similarity: number;
+  identifiers: Record<string, string>;
+}
+
+interface PromptMatchResult {
+  prompt: string;
+  facultyMatches: FacultyMatchResult[];
+}
+
 interface SubmissionResponse {
   summary: string;
   warnings: string[];
   details: SubmissionDetails;
+  promptMatches: PromptMatchResult[];
 }
 
 interface StatusMessage {
@@ -174,6 +186,15 @@ const describeEmbeddingProgress = (
   }
 
   return pieces.filter(Boolean).join(" – ");
+};
+
+const formatSimilarity = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return "n/a";
+  }
+
+  const percent = (value * 100).toFixed(1);
+  return `${percent}%`;
 };
 
 function App() {
@@ -1642,6 +1663,69 @@ function App() {
                 </dl>
               </div>
             </div>
+
+            {result.promptMatches.length > 0 && (
+              <section className="match-results">
+                {result.promptMatches.map((match, matchIndex) => (
+                  <article className="match-card" key={`match-${matchIndex}`}>
+                    <header className="match-card-header">
+                      <h3>Faculty matches for prompt</h3>
+                      <pre className="match-prompt">{match.prompt}</pre>
+                    </header>
+                    {match.facultyMatches.length > 0 ? (
+                      <ol className="match-list">
+                        {match.facultyMatches.map((faculty, rank) => {
+                          const identifierEntries = Object.entries(
+                            faculty.identifiers,
+                          );
+                          const hasIdentifiers = identifierEntries.length > 0;
+
+                          return (
+                            <li
+                              className="match-list-item"
+                              key={`${faculty.rowIndex}-${rank}`}
+                            >
+                              <div className="match-list-header">
+                                <span className="match-rank">#{rank + 1}</span>
+                                <span className="match-score">
+                                  Similarity: {formatSimilarity(faculty.similarity)}
+                                </span>
+                              </div>
+                              <div className="match-identifiers">
+                                {hasIdentifiers ? (
+                                  identifierEntries.map(([label, value]) => (
+                                    <span
+                                      key={`${faculty.rowIndex}-${label}`}
+                                      className="match-identifier"
+                                    >
+                                      <span className="match-identifier-label">
+                                        {label}:
+                                      </span>{" "}
+                                      {value}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="match-identifier">
+                                    <span className="match-identifier-label">
+                                      Row index:
+                                    </span>{" "}
+                                    {faculty.rowIndex}
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    ) : (
+                      <p className="match-empty">
+                        No faculty matches were returned for this prompt.
+                      </p>
+                    )}
+                  </article>
+                ))}
+              </section>
+            )}
           </section>
         )}
 
