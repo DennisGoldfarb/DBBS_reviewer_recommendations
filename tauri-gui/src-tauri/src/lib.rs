@@ -410,7 +410,7 @@ async fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<Strin
             .await
             .map_err(|err| format!("Embedding refresh task failed: {err}"))?;
 
-    Ok(result)
+    Ok(result?)
 }
 
 fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<String, String> {
