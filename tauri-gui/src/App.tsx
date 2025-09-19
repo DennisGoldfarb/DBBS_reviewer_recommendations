@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
@@ -74,6 +75,15 @@ interface StatusMessage {
   message: string;
 }
 
+interface EmbeddingProgressPayload {
+  phase: string;
+  message?: string | null;
+  processedRows: number;
+  totalRows: number;
+  elapsedSeconds?: number | null;
+  estimatedRemainingSeconds?: number | null;
+}
+
 const THEME_STORAGE_KEY = "washu-theme";
 
 const getStoredThemePreference = (): ThemePreference => {
@@ -87,6 +97,83 @@ const getStoredThemePreference = (): ThemePreference => {
   }
 
   return "light";
+};
+
+const formatDuration = (valueInSeconds: number): string => {
+  if (!Number.isFinite(valueInSeconds) || valueInSeconds < 0) {
+    return "unknown";
+  }
+
+  const totalSeconds = Math.round(valueInSeconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+
+  if (minutes > 0 || hours > 0) {
+    parts.push(`${minutes}m`);
+  }
+
+  parts.push(`${seconds}s`);
+  return parts.join(" ");
+};
+
+const describeEmbeddingProgress = (
+  progress: EmbeddingProgressPayload,
+): string => {
+  const pieces: string[] = [];
+  const baseMessage = progress.message?.trim();
+
+  if (baseMessage) {
+    pieces.push(baseMessage);
+  } else if (progress.totalRows > 0) {
+    const percent = Math.min(
+      100,
+      Math.max(
+        0,
+        Math.floor((progress.processedRows / progress.totalRows) * 100),
+      ),
+    );
+    pieces.push(
+      `Processed ${progress.processedRows} of ${progress.totalRows} faculty rows (${percent}%)`,
+    );
+  }
+
+  if (progress.totalRows > 0) {
+    const percent = Math.min(
+      100,
+      Math.max(
+        0,
+        Math.floor((progress.processedRows / progress.totalRows) * 100),
+      ),
+    );
+    const summary = `${progress.processedRows} of ${progress.totalRows} rows (${percent}%)`;
+    if (!baseMessage || !baseMessage.includes(`${progress.totalRows}`)) {
+      pieces.push(summary);
+    }
+  }
+
+  const remaining = progress.estimatedRemainingSeconds;
+  if (
+    typeof remaining === "number" &&
+    Number.isFinite(remaining) &&
+    remaining > 0
+  ) {
+    pieces.push(`ETA: ${formatDuration(remaining)}`);
+  } else if (
+    progress.phase === "complete" &&
+    typeof progress.elapsedSeconds === "number" &&
+    Number.isFinite(progress.elapsedSeconds) &&
+    progress.elapsedSeconds > 0
+  ) {
+    pieces.push(`Completed in ${formatDuration(progress.elapsedSeconds)}`);
+  }
+
+  return pieces.filter(Boolean).join(" – ");
 };
 
 function App() {
@@ -120,6 +207,8 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUpdatingEmbeddings, setIsUpdatingEmbeddings] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
+  const [embeddingProgress, setEmbeddingProgress] =
+    useState<EmbeddingProgressPayload | null>(null);
   const [datasetStatus, setDatasetStatus] =
     useState<FacultyDatasetStatus | null>(null);
   const [isDatasetLoading, setIsDatasetLoading] = useState(true);
@@ -221,6 +310,32 @@ function App() {
   }, [applyDatasetStatus]);
 
   useEffect(() => {
+    let isMounted = true;
+    let unlisten: UnlistenFn | null = null;
+
+    listen<EmbeddingProgressPayload>("faculty-embedding-progress", (event) => {
+      setEmbeddingProgress(event.payload);
+    })
+      .then((fn) => {
+        if (!isMounted) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* ignore progress binding errors */
+      });
+
+    return () => {
+      isMounted = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!datasetStatus?.analysis) {
       setAvailablePrograms([]);
       setSelectedPrograms([]);
@@ -251,6 +366,7 @@ function App() {
   const runEmbeddingRefresh = useCallback(
     async (statusForValidation: FacultyDatasetStatus | null) => {
       const currentStatus = statusForValidation ?? datasetStatus;
+      setEmbeddingProgress(null);
       if (!currentStatus || !currentStatus.isValid) {
         const message =
           currentStatus?.message ??
@@ -273,6 +389,7 @@ function App() {
         setEmbeddingStatus({ variant: "error", message });
       } finally {
         setIsUpdatingEmbeddings(false);
+        setEmbeddingProgress(null);
       }
     },
     [datasetStatus],
@@ -1526,6 +1643,12 @@ function App() {
               </div>
             </div>
           </section>
+        )}
+
+        {embeddingProgress && (
+          <div className="status-banner status-info">
+            {describeEmbeddingProgress(embeddingProgress)}
+          </div>
         )}
 
         {embeddingStatus && (
