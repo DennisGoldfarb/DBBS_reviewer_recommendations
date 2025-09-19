@@ -5,6 +5,7 @@ import "./App.css";
 
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
 type FacultyScope = "all" | "program" | "custom";
+type ThemePreference = "light" | "dark";
 
 type ProgramName = string;
 
@@ -73,6 +74,21 @@ interface StatusMessage {
   message: string;
 }
 
+const THEME_STORAGE_KEY = "washu-theme";
+
+const getStoredThemePreference = (): ThemePreference => {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (stored === "light" || stored === "dark") {
+    return stored;
+  }
+
+  return "light";
+};
+
 function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
@@ -133,6 +149,31 @@ function App() {
   const [datasetConfigurationError, setDatasetConfigurationError] = useState<
     string | null
   >(null);
+  const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.documentElement.dataset.theme = theme;
+    if (document.body) {
+      document.body.dataset.theme = theme;
+    }
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((current) => (current === "light" ? "dark" : "light"));
+  };
+
+  const themeToggleLabel =
+    theme === "light"
+      ? "Switch to dark WashU theme"
+      : "Switch to light WashU theme";
 
   const applyDatasetStatus = useCallback(
     (
@@ -765,6 +806,24 @@ function App() {
       <main>
         <header className="page-header">
           <h1>DBBS Faculty Recommendation Console</h1>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            aria-pressed={theme === "dark"}
+            aria-label={themeToggleLabel}
+            title={themeToggleLabel}
+          >
+            <span className="theme-toggle-icon" aria-hidden="true">
+              {theme === "dark" ? "🌙" : "☀️"}
+            </span>
+            <span className="theme-toggle-text">
+              <span className="theme-toggle-name">
+                {theme === "dark" ? "Dark WashU" : "Light WashU"}
+              </span>
+              <span className="theme-toggle-action">Toggle theme</span>
+            </span>
+          </button>
         </header>
 
         <form className="matching-form" onSubmit={handleSubmit}>
