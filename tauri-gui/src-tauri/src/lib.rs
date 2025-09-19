@@ -1,6 +1,6 @@
 use calamine::{open_workbook_auto, DataType, Reader};
 use chrono::{DateTime, Utc};
-use dotext::Docx;
+use dotext::{Docx, MsDoc};
 use rtf_parser::document::RtfDocument;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
