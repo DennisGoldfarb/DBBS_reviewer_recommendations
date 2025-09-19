@@ -7,37 +7,37 @@
   color: var(--washu-text);
   background-color: var(--washu-page);
 
-  --washu-page: #f7f1eb;
-  --washu-page-strong: #ede1d5;
+  --washu-page: #fdf8f4;
+  --washu-page-strong: #f5ebe3;
   --washu-surface: #ffffff;
-  --washu-surface-muted: #faf3ee;
-  --washu-border: #d7c5b7;
-  --washu-border-strong: #c4a899;
-  --washu-text: #2e2d29;
-  --washu-heading: #2e2d29;
-  --washu-text-muted: #6d6e71;
+  --washu-surface-muted: #fbf2ed;
+  --washu-border: #e5d5c9;
+  --washu-border-strong: #d6bfaf;
+  --washu-text: #32201c;
+  --washu-heading: #21110f;
+  --washu-text-muted: #7f6a64;
   --washu-primary: #ad0000;
   --washu-primary-dark: #7f0000;
-  --washu-primary-soft: #f3d1d1;
+  --washu-primary-soft: #f8d8d8;
   --washu-accent: #5c1764;
-  --washu-accent-soft: #ead6ef;
+  --washu-accent-soft: #f2e3f6;
   --washu-info: #005f9e;
-  --washu-info-soft: #d6e6f3;
+  --washu-info-soft: #e0f0fa;
   --washu-warning: #b45309;
-  --washu-warning-soft: #f6e0c7;
+  --washu-warning-soft: #faead7;
   --washu-danger: #8c1c13;
-  --washu-danger-soft: #f4d4d1;
-  --washu-shadow-soft: rgba(67, 34, 24, 0.08);
-  --washu-shadow: rgba(67, 34, 24, 0.12);
-  --washu-shadow-strong: rgba(67, 34, 24, 0.2);
-  --washu-primary-shadow: rgba(173, 0, 0, 0.25);
-  --washu-primary-shadow-strong: rgba(173, 0, 0, 0.35);
-  --washu-accent-shadow: rgba(92, 23, 100, 0.28);
-  --washu-accent-shadow-strong: rgba(92, 23, 100, 0.38);
-  --washu-info-shadow: rgba(0, 95, 158, 0.22);
-  --washu-info-shadow-strong: rgba(0, 95, 158, 0.32);
-  --washu-overlay: rgba(46, 45, 41, 0.6);
-  --washu-focus-ring: rgba(173, 0, 0, 0.25);
+  --washu-danger-soft: #f7dfdc;
+  --washu-shadow-soft: rgba(61, 37, 25, 0.04);
+  --washu-shadow: rgba(61, 37, 25, 0.08);
+  --washu-shadow-strong: rgba(61, 37, 25, 0.14);
+  --washu-primary-shadow: rgba(173, 0, 0, 0.18);
+  --washu-primary-shadow-strong: rgba(173, 0, 0, 0.26);
+  --washu-accent-shadow: rgba(92, 23, 100, 0.22);
+  --washu-accent-shadow-strong: rgba(92, 23, 100, 0.3);
+  --washu-info-shadow: rgba(0, 95, 158, 0.18);
+  --washu-info-shadow-strong: rgba(0, 95, 158, 0.26);
+  --washu-overlay: rgba(46, 45, 41, 0.35);
+  --washu-focus-ring: rgba(173, 0, 0, 0.2);
 }
 
 body,
@@ -84,7 +84,7 @@ fieldset {
   border: 1px solid var(--washu-border);
   padding: 1.5rem;
   background: var(--washu-surface);
-  box-shadow: 0 20px 45px var(--washu-shadow);
+  box-shadow: 0 12px 30px var(--washu-shadow);
 }
 
 legend {
@@ -112,8 +112,8 @@ legend {
   gap: 0.45rem;
   border-radius: 12px;
   border: 1px solid var(--washu-border);
-  padding: 0.55rem 0.95rem;
-  background: var(--washu-surface-muted);
+  padding: 0.65rem 1rem;
+  background: var(--washu-surface);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -124,7 +124,7 @@ legend {
 
 .radio-option:hover {
   border-color: var(--washu-primary);
-  box-shadow: 0 6px 18px var(--washu-primary-shadow);
+  box-shadow: 0 4px 14px var(--washu-primary-shadow);
 }
 
 .input-stack {
@@ -201,18 +201,18 @@ button {
   background: var(--washu-primary);
   color: #ffffff;
   transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
-  box-shadow: 0 14px 28px var(--washu-primary-shadow);
+  box-shadow: 0 10px 24px var(--washu-primary-shadow);
 }
 
 button.secondary {
   background: var(--washu-accent);
-  box-shadow: 0 14px 28px var(--washu-accent-shadow);
+  box-shadow: 0 10px 24px var(--washu-accent-shadow);
 }
 
 button.ghost {
   background: transparent;
   color: var(--washu-primary);
-  border: 1px solid var(--washu-primary-soft);
+  border: 1px solid var(--washu-border);
   box-shadow: none;
 }
 
@@ -226,7 +226,7 @@ button.ghost:not(:disabled):hover {
 button.add-entry-button {
   align-self: flex-start;
   background: var(--washu-info);
-  box-shadow: 0 14px 28px var(--washu-info-shadow);
+  box-shadow: 0 10px 24px var(--washu-info-shadow);
 }
 
 button:disabled {
@@ -238,25 +238,25 @@ button:disabled {
 
 button:not(:disabled):hover {
   transform: translateY(-1px);
-  box-shadow: 0 18px 32px var(--washu-primary-shadow-strong);
+  box-shadow: 0 14px 28px var(--washu-primary-shadow-strong);
 }
 
 button.secondary:not(:disabled):hover {
-  box-shadow: 0 18px 32px var(--washu-accent-shadow-strong);
+  box-shadow: 0 14px 28px var(--washu-accent-shadow-strong);
 }
 
 button.add-entry-button:not(:disabled):hover {
-  box-shadow: 0 18px 32px var(--washu-info-shadow-strong);
+  box-shadow: 0 14px 28px var(--washu-info-shadow-strong);
 }
 
 .path-preview {
   font-size: 0.95rem;
   color: var(--washu-text-muted);
   word-break: break-all;
-  background: var(--washu-page-strong);
-  border: 1px dashed var(--washu-border);
-  padding: 0.75rem;
-  border-radius: 12px;
+  background: var(--washu-surface);
+  border: 1px dashed var(--washu-border-strong);
+  padding: 0.85rem;
+  border-radius: 14px;
 }
 
 .preview-status {
@@ -271,7 +271,7 @@ button.add-entry-button:not(:disabled):hover {
   padding: 0.7rem 0.95rem;
   border-radius: 12px;
   background: var(--washu-danger-soft);
-  border: 1px solid rgba(140, 28, 19, 0.4);
+  border: 1px solid var(--washu-border-strong);
   color: var(--washu-danger);
   font-size: 0.9rem;
 }
@@ -289,7 +289,7 @@ button.add-entry-button:not(:disabled):hover {
   gap: 1rem;
   padding: 1rem;
   border-radius: 14px;
-  background: var(--washu-surface-muted);
+  background: var(--washu-surface);
   border: 1px solid var(--washu-border);
 }
 
@@ -353,7 +353,7 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .preview-table th {
-  background: var(--washu-page-strong);
+  background: var(--washu-surface-muted);
   font-weight: 600;
   color: var(--washu-heading);
 }
@@ -373,9 +373,9 @@ button.add-entry-button:not(:disabled):hover {
   align-items: center;
   gap: 0.65rem;
   margin-top: 1.1rem;
-  padding: 0.75rem 0.9rem;
+  padding: 0.85rem 1rem;
   border-radius: 12px;
-  background: var(--washu-surface-muted);
+  background: var(--washu-surface);
   border: 1px solid var(--washu-border);
 }
 
@@ -411,7 +411,7 @@ button.add-entry-button:not(:disabled):hover {
   border-radius: 18px;
   background: var(--washu-surface);
   border: 1px solid var(--washu-border);
-  box-shadow: 0 20px 45px var(--washu-shadow);
+  box-shadow: 0 16px 42px var(--washu-shadow);
 }
 
 .dataset-card-header {
@@ -529,7 +529,7 @@ button.add-entry-button:not(:disabled):hover {
   overflow-y: auto;
   background: var(--washu-surface);
   border-radius: 18px;
-  box-shadow: 0 30px 60px var(--washu-shadow-strong);
+  box-shadow: 0 22px 54px var(--washu-shadow-strong);
   padding: 1.5rem;
   border: 1px solid var(--washu-border);
 }
@@ -584,14 +584,14 @@ button.add-entry-button:not(:disabled):hover {
   border-radius: 12px;
   border: 1px solid var(--washu-border);
   padding: 0.65rem 0.9rem;
-  background: var(--washu-surface-muted);
+  background: var(--washu-surface);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .checkbox-option:hover {
   border-color: var(--washu-primary);
-  box-shadow: 0 6px 18px var(--washu-primary-shadow);
+  box-shadow: 0 4px 14px var(--washu-primary-shadow);
 }
 
 .checkbox-option input[type="checkbox"] {
@@ -610,25 +610,25 @@ button.add-entry-button:not(:disabled):hover {
   padding: 0.85rem 1.15rem;
   border-radius: 12px;
   font-weight: 500;
-  box-shadow: 0 14px 30px var(--washu-shadow);
+  box-shadow: 0 12px 28px var(--washu-shadow);
 }
 
 .status-success {
   background: var(--washu-accent-soft);
   color: var(--washu-accent);
-  border: 1px solid rgba(92, 23, 100, 0.35);
+  border: 1px solid var(--washu-border);
 }
 
 .status-error {
   background: var(--washu-danger-soft);
   color: var(--washu-danger);
-  border: 1px solid rgba(140, 28, 19, 0.4);
+  border: 1px solid var(--washu-border);
 }
 
 .status-info {
   background: var(--washu-info-soft);
   color: var(--washu-info);
-  border: 1px solid rgba(0, 95, 158, 0.35);
+  border: 1px solid var(--washu-border);
 }
 
 .result-card {
@@ -637,7 +637,7 @@ button.add-entry-button:not(:disabled):hover {
   border-radius: 18px;
   background: var(--washu-surface);
   border: 1px solid var(--washu-border);
-  box-shadow: 0 24px 60px var(--washu-shadow-strong);
+  box-shadow: 0 18px 48px var(--washu-shadow-strong);
 }
 
 .result-card h2 {
@@ -701,8 +701,8 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .prompt-preview {
-  background: var(--washu-accent);
-  color: #fdf6ff;
+  background: var(--washu-accent-soft);
+  color: var(--washu-accent);
   padding: 1rem;
   border-radius: 12px;
   white-space: pre-wrap;
@@ -728,7 +728,7 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .faculty-table th {
-  background: var(--washu-page-strong);
+  background: var(--washu-surface-muted);
   color: var(--washu-heading);
 }
 
@@ -743,7 +743,7 @@ button.add-entry-button:not(:disabled):hover {
 .remove-button {
   background: transparent;
   color: var(--washu-danger);
-  border: 1px solid rgba(140, 28, 19, 0.4);
+  border: 1px solid var(--washu-border-strong);
   padding: 0.55rem 0.9rem;
   border-radius: 10px;
   font-weight: 600;
@@ -782,32 +782,3 @@ button.add-entry-button:not(:disabled):hover {
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --washu-page: #1d1417;
-    --washu-page-strong: #27191d;
-    --washu-surface: #2f2026;
-    --washu-surface-muted: #39252c;
-    --washu-border: rgba(244, 215, 215, 0.22);
-    --washu-border-strong: rgba(244, 215, 215, 0.32);
-    --washu-text: #f9f1ec;
-    --washu-heading: #fff7f3;
-    --washu-text-muted: #dbc5bd;
-    --washu-primary-soft: rgba(173, 0, 0, 0.35);
-    --washu-accent-soft: rgba(92, 23, 100, 0.35);
-    --washu-info-soft: rgba(0, 95, 158, 0.4);
-    --washu-warning-soft: rgba(180, 83, 9, 0.38);
-    --washu-danger-soft: rgba(140, 28, 19, 0.42);
-    --washu-shadow-soft: rgba(0, 0, 0, 0.4);
-    --washu-shadow: rgba(0, 0, 0, 0.5);
-    --washu-shadow-strong: rgba(0, 0, 0, 0.6);
-    --washu-primary-shadow: rgba(173, 0, 0, 0.45);
-    --washu-primary-shadow-strong: rgba(173, 0, 0, 0.55);
-    --washu-accent-shadow: rgba(92, 23, 100, 0.5);
-    --washu-accent-shadow-strong: rgba(92, 23, 100, 0.6);
-    --washu-info-shadow: rgba(0, 95, 158, 0.45);
-    --washu-info-shadow-strong: rgba(0, 95, 158, 0.55);
-    --washu-overlay: rgba(12, 10, 11, 0.72);
-    --washu-focus-ring: rgba(255, 140, 140, 0.3);
-  }
-}
