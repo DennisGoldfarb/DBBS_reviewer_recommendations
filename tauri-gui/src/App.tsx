@@ -56,7 +56,6 @@ interface SubmissionDetails {
   customFacultyPath: string | null;
   recommendationsPerStudent: number;
   recommendationsPerFaculty: number;
-  updateEmbeddings: boolean;
   promptPreview?: string;
   spreadsheetPromptColumns: string[];
   spreadsheetIdentifierColumns: string[];
@@ -85,7 +84,6 @@ function App() {
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
   const [studentRecCount, setStudentRecCount] = useState("0");
-  const [updateEmbeddings, setUpdateEmbeddings] = useState(false);
 
   const [spreadsheetPreview, setSpreadsheetPreview] =
     useState<SpreadsheetPreview | null>(null);
@@ -733,7 +731,6 @@ function App() {
                 : undefined,
             facultyRecsPerStudent: facultyRecommendations,
             studentRecsPerFaculty: studentRecommendations,
-            updateEmbeddings,
             spreadsheetPromptColumns:
               taskType === "spreadsheet"
                 ? mapSelectedColumns(selectedPromptColumns)
@@ -801,7 +798,7 @@ function App() {
                   checked={taskType === "document"}
                   onChange={() => handleTaskTypeChange("document")}
                 />
-                <span>Document file</span>
+                <span>Single document</span>
               </label>
               <label className="radio-option">
                 <input
@@ -1194,17 +1191,6 @@ function App() {
                 />
               </label>
             </div>
-            <div className="checkbox-row">
-              <input
-                id="update-embeddings"
-                type="checkbox"
-                checked={updateEmbeddings}
-                onChange={(event) => setUpdateEmbeddings(event.target.checked)}
-              />
-              <label htmlFor="update-embeddings">
-                Refresh faculty embeddings before running this match
-              </label>
-            </div>
           </fieldset>
 
           <section className="dataset-card">
@@ -1479,8 +1465,6 @@ function App() {
                   <dd>{result.details.recommendationsPerStudent}</dd>
                   <dt>Students per faculty</dt>
                   <dd>{result.details.recommendationsPerFaculty}</dd>
-                  <dt>Refresh embeddings</dt>
-                  <dd>{result.details.updateEmbeddings ? "Yes" : "No"}</dd>
                 </dl>
               </div>
             </div>

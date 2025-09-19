@@ -52,7 +52,6 @@ struct SubmissionPayload {
     custom_faculty_path: Option<String>,
     faculty_recs_per_student: u32,
     student_recs_per_faculty: u32,
-    update_embeddings: bool,
     #[serde(default)]
     spreadsheet_prompt_columns: Vec<String>,
     #[serde(default)]
@@ -85,7 +84,6 @@ struct SubmissionDetails {
     custom_faculty_path: Option<String>,
     recommendations_per_student: u32,
     recommendations_per_faculty: u32,
-    update_embeddings: bool,
     prompt_preview: Option<String>,
     spreadsheet_prompt_columns: Vec<String>,
     spreadsheet_identifier_columns: Vec<String>,
@@ -181,7 +179,6 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         custom_faculty_path,
         faculty_recs_per_student,
         student_recs_per_faculty,
-        update_embeddings,
         spreadsheet_prompt_columns,
         spreadsheet_identifier_columns,
     } = payload;
@@ -205,7 +202,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
             prompt_preview = Some(build_prompt_preview(text));
         }
         TaskType::Document => {
-            let document = resolve_existing_path(document_path, false, "Document file")?;
+            let document = resolve_existing_path(document_path, false, "Single document")?;
             if let Some(message) =
                 validate_extension(&document, &["txt", "pdf", "doc", "docx"], "document")
             {
@@ -277,7 +274,6 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         custom_faculty_path: faculty_roster_path.clone(),
         recommendations_per_student: faculty_recs_per_student,
         recommendations_per_faculty: student_recs_per_faculty,
-        update_embeddings,
         prompt_preview,
         spreadsheet_prompt_columns: selected_prompt_columns.clone(),
         spreadsheet_identifier_columns: selected_identifier_columns.clone(),
@@ -288,7 +284,6 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         &faculty_scope,
         faculty_recs_per_student,
         student_recs_per_faculty,
-        update_embeddings,
         details.program_filters.len(),
         faculty_roster_path.is_some(),
     );
@@ -1464,7 +1459,6 @@ fn build_summary(
     faculty_scope: &FacultyScope,
     faculty_per_student: u32,
     students_per_faculty: u32,
-    update_embeddings: bool,
     program_count: usize,
     has_custom_roster: bool,
 ) -> String {
@@ -1500,10 +1494,6 @@ fn build_summary(
             " Each faculty member will receive up to {students_per_faculty} student recommendation{plural}.",
             plural = if students_per_faculty == 1 { "" } else { "s" }
         ));
-    }
-
-    if update_embeddings {
-        summary.push_str(" Faculty embeddings will be refreshed before matching.");
     }
 
     summary
