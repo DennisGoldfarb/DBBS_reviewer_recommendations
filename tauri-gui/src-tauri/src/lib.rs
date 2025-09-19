@@ -140,7 +140,7 @@ struct FacultyDatasetStatus {
     analysis: Option<FacultyDatasetAnalysis>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FacultyDatasetAnalysis {
     embedding_columns: Vec<String>,
