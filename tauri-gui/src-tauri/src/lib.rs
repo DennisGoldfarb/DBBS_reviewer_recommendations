@@ -5,8 +5,9 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor};
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::time::SystemTime;
 use tauri::Manager;
 
@@ -16,6 +17,8 @@ const FACULTY_DATASET_EXTENSIONS: &[&str] = &["tsv", "txt", "xlsx", "xls"];
 const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
 const FACULTY_DATASET_METADATA_NAME: &str = "faculty_dataset_metadata.json";
 const FACULTY_DATASET_SOURCE_NAME: &str = "faculty_dataset_source.txt";
+const FACULTY_EMBEDDINGS_NAME: &str = "faculty_embeddings.json";
+const DEFAULT_EMBEDDING_MODEL: &str = "NeuML/pubmedbert-base-embeddings";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -297,10 +300,438 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
     })
 }
 
-#[tauri::command]
-fn update_faculty_embeddings() -> Result<String, String> {
-    Ok("Faculty embeddings update request received. The backend stub only confirms availability in this build.".into())
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingRequestPayload {
+    model: String,
+    texts: Vec<EmbeddingRequestRow>,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingRequestRow {
+    id: usize,
+    text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingResponsePayload {
+    model: String,
+    dimension: usize,
+    rows: Vec<EmbeddingResponseRow>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingResponseRow {
+    id: usize,
+    embedding: Vec<f32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FacultyEmbeddingEntry {
+    row_index: usize,
+    identifiers: HashMap<String, String>,
+    embedding: Vec<f32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FacultyEmbeddingIndex {
+    model: String,
+    generated_at: String,
+    dimension: usize,
+    total_rows: usize,
+    embedded_rows: usize,
+    skipped_rows: usize,
+    embedding_columns: Vec<String>,
+    identifier_columns: Vec<String>,
+    entries: Vec<FacultyEmbeddingEntry>,
+}
+
+struct RowEmbeddingContext {
+    row_index: usize,
+    text: String,
+    identifiers: HashMap<String, String>,
+}
+
+#[tauri::command]
+fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let status = build_faculty_dataset_status(&app_handle)?;
+
+    if !status.is_valid {
+        let message = status.message.unwrap_or_else(|| {
+            "Provide a valid faculty dataset before refreshing embeddings.".into()
+        });
+        return Err(message);
+    }
+
+    let analysis = status.analysis.clone().ok_or_else(|| {
+        "Run the faculty dataset analysis before generating embeddings.".to_string()
+    })?;
+
+    let dataset_path = dataset_destination(&app_handle)?;
+    if !dataset_path.exists() {
+        return Err("No faculty dataset is available. Restore or configure the dataset before generating embeddings.".into());
+    }
+
+    let (headers, rows) = read_full_spreadsheet(&dataset_path)?;
+
+    if rows.is_empty() {
+        return Err("The faculty dataset does not include any data rows to embed.".into());
+    }
+
+    let header_map = build_header_index_map(&headers);
+    let embedding_indexes = indexes_from_labels(&header_map, &analysis.embedding_columns)?;
+    let identifier_indexes = indexes_from_labels(&header_map, &analysis.identifier_columns)?;
+
+    if embedding_indexes.is_empty() {
+        return Err("No embedding columns were identified for the faculty dataset.".into());
+    }
+
+    let mut contexts = Vec::new();
+    let mut skipped_due_to_text = 0usize;
+
+    for (row_index, row) in rows.iter().enumerate() {
+        let mut text_parts = Vec::new();
+        for &index in &embedding_indexes {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                text_parts.push(trimmed.to_string());
+            }
+        }
+
+        if text_parts.is_empty() {
+            skipped_due_to_text += 1;
+            continue;
+        }
+
+        let text = text_parts.join("\n\n");
+
+        let mut identifiers = HashMap::new();
+        for &index in &identifier_indexes {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let label = header_label(&headers, index);
+                identifiers
+                    .entry(label)
+                    .or_insert_with(|| trimmed.to_string());
+            }
+        }
+
+        contexts.push(RowEmbeddingContext {
+            row_index,
+            text,
+            identifiers,
+        });
+    }
+
+    if contexts.is_empty() {
+        return Err("None of the faculty rows include embedding content. Add research interest details before refreshing embeddings.".into());
+    }
+
+    let request_payload = EmbeddingRequestPayload {
+        model: DEFAULT_EMBEDDING_MODEL.to_string(),
+        texts: contexts
+            .iter()
+            .map(|context| EmbeddingRequestRow {
+                id: context.row_index,
+                text: context.text.clone(),
+            })
+            .collect(),
+    };
+
+    let response = run_embedding_helper(&request_payload)?;
+
+    if response.dimension == 0 || response.rows.is_empty() {
+        return Err("The embedding helper returned an empty result. Verify the Python environment can load the PubMedBERT model.".into());
+    }
+
+    let mut embedding_map: HashMap<usize, Vec<f32>> = HashMap::new();
+    for row in response.rows {
+        embedding_map.insert(row.id, row.embedding);
+    }
+
+    let mut entries = Vec::new();
+    let mut missing_embeddings = 0usize;
+
+    for context in contexts {
+        match embedding_map.remove(&context.row_index) {
+            Some(embedding) => {
+                entries.push(FacultyEmbeddingEntry {
+                    row_index: context.row_index,
+                    identifiers: context.identifiers,
+                    embedding,
+                });
+            }
+            None => {
+                missing_embeddings += 1;
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return Err("No embeddings were generated for the faculty dataset. Confirm the Python helper executed successfully.".into());
+    }
+
+    entries.sort_by_key(|entry| entry.row_index);
+
+    let total_rows = rows.len();
+    let embedded_rows = entries.len();
+    let skipped_rows = total_rows.saturating_sub(embedded_rows);
+
+    let index = FacultyEmbeddingIndex {
+        model: response.model,
+        generated_at: Utc::now().to_rfc3339(),
+        dimension: response.dimension,
+        total_rows,
+        embedded_rows,
+        skipped_rows,
+        embedding_columns: analysis.embedding_columns.clone(),
+        identifier_columns: analysis.identifier_columns.clone(),
+        entries,
+    };
+
+    let embeddings_path = dataset_directory(&app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
+    ensure_dataset_directory(&embeddings_path)?;
+    let json = serde_json::to_string_pretty(&index)
+        .map_err(|err| format!("Unable to serialize faculty embeddings: {err}"))?;
+    fs::write(&embeddings_path, json)
+        .map_err(|err| format!("Unable to write faculty embeddings: {err}"))?;
+
+    let mut message = format!(
+        "Generated embeddings for {embedded_rows} faculty row{plural} using {model}.",
+        embedded_rows = embedded_rows,
+        plural = if embedded_rows == 1 { "" } else { "s" },
+        model = index.model
+    );
+
+    if skipped_due_to_text + missing_embeddings > 0 {
+        message.push_str(&format!(
+            " Skipped {count} row{plural} without usable embedding content.",
+            count = skipped_due_to_text + missing_embeddings,
+            plural = if skipped_due_to_text + missing_embeddings == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ));
+    }
+
+    message.push_str(&format!(
+        " Saved the embedding index to {}.",
+        embeddings_path.to_string_lossy()
+    ));
+
+    Ok(message)
+}
+
+fn build_header_index_map(headers: &[String]) -> HashMap<String, usize> {
+    let mut map = HashMap::new();
+    for (index, header) in headers.iter().enumerate() {
+        let label = header.trim();
+        let normalized = if label.is_empty() {
+            format!("Column {}", index + 1)
+        } else {
+            label.to_string()
+        };
+        map.entry(normalized.to_lowercase()).or_insert(index);
+    }
+    map
+}
+
+fn indexes_from_labels(
+    header_map: &HashMap<String, usize>,
+    labels: &[String],
+) -> Result<Vec<usize>, String> {
+    let mut indexes = Vec::new();
+
+    for label in labels {
+        let key = label.trim().to_lowercase();
+        if let Some(&index) = header_map.get(&key) {
+            indexes.push(index);
+        } else {
+            return Err(format!(
+                "The column '{label}' is not available in the faculty dataset. Re-run the dataset analysis before refreshing embeddings."
+            ));
+        }
+    }
+
+    indexes.sort_unstable();
+    indexes.dedup();
+    Ok(indexes)
+}
+
+fn run_embedding_helper(
+    payload: &EmbeddingRequestPayload,
+) -> Result<EmbeddingResponsePayload, String> {
+    let mut child = spawn_python_helper()?;
+    let input = serde_json::to_vec(payload)
+        .map_err(|err| format!("Unable to serialize the embedding request: {err}"))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(&input)
+            .map_err(|err| format!("Unable to send data to the embedding helper: {err}"))?;
+    } else {
+        return Err("Unable to access the embedding helper stdin.".into());
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|err| format!("Unable to read embedding helper output: {err}"))?;
+
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr);
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return Err("The embedding helper exited with an error.".into());
+        }
+        return Err(trimmed.to_string());
+    }
+
+    if output.stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            return Err("The embedding helper did not produce any output.".into());
+        }
+        return Err(trimmed.to_string());
+    }
+
+    serde_json::from_slice(&output.stdout).map_err(|err| {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.trim().is_empty() {
+            format!("Unable to parse embedding helper output: {err}")
+        } else {
+            format!(
+                "Unable to parse embedding helper output: {err}. Details: {}",
+                stderr.trim()
+            )
+        }
+    })
+}
+
+fn spawn_python_helper() -> Result<Child, String> {
+    let script = PYTHON_EMBEDDING_HELPER;
+    let candidates = ["python3", "python"];
+
+    for candidate in candidates {
+        match Command::new(candidate)
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+            .env("TOKENIZERS_PARALLELISM", "false")
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    continue;
+                }
+                return Err(format!("Unable to launch {candidate}: {err}"));
+            }
+        }
+    }
+
+    Err(
+        "Python 3 is required to generate embeddings. Install Python along with the 'torch' and 'transformers' packages.".into(),
+    )
+}
+
+const PYTHON_EMBEDDING_HELPER: &str = r#"
+import json
+import os
+import sys
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+try:
+    from transformers import AutoModel, AutoTokenizer
+    from transformers.utils import logging as hf_logging
+except ImportError as exc:
+    sys.stderr.write("Install the 'transformers' package (with torch) to generate embeddings.\n")
+    sys.stderr.write(str(exc) + "\n")
+    sys.exit(1)
+
+try:
+    import torch
+except ImportError as exc:
+    sys.stderr.write("Install the 'torch' package to generate embeddings.\n")
+    sys.stderr.write(str(exc) + "\n")
+    sys.exit(1)
+
+hf_logging.set_verbosity_error()
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"Unable to parse embedding request: {exc}\n")
+        sys.exit(1)
+
+    model_name = payload.get("model") or "NeuML/pubmedbert-base-embeddings"
+    texts = payload.get("texts") or []
+
+    if not texts:
+        json.dump({"model": model_name, "dimension": 0, "rows": []}, sys.stdout)
+        return
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    model.eval()
+
+    rows = []
+    for item in texts:
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+            padding=True,
+        )
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        last_hidden = outputs.last_hidden_state
+        attention_mask = inputs["attention_mask"]
+        mask = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
+        masked = last_hidden * mask
+        summed = masked.sum(dim=1)
+        counts = mask.sum(dim=1).clamp(min=1e-9)
+        embedding = (summed / counts).squeeze(0)
+
+        rows.append({"id": item.get("id"), "embedding": embedding.tolist()})
+
+    result = {
+        "model": model_name,
+        "dimension": len(rows[0]["embedding"]) if rows else 0,
+        "rows": rows,
+    }
+
+    json.dump(result, sys.stdout)
+
+
+if __name__ == "__main__":
+    main()
+"#;
 
 #[tauri::command]
 fn get_faculty_dataset_status(
