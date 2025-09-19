@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use tauri::Manager;
 
 const FACULTY_DATASET_FILENAME: &str = "faculty_dataset.tsv";
 const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
@@ -95,7 +96,7 @@ struct SubmissionResponse {
     details: SubmissionDetails,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SpreadsheetPreview {
     headers: Vec<String>,
@@ -414,7 +415,7 @@ fn read_delimited_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<Strin
     let mut rows = Vec::new();
     for record in reader.records() {
         let record = record.map_err(|err| format!("Unable to read spreadsheet rows: {err}"))?;
-        let mut values: Vec<String> = record
+        let values: Vec<String> = record
             .iter()
             .map(|value| value.trim().to_string())
             .collect();
@@ -455,7 +456,7 @@ fn read_excel_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>)
     let mut rows = Vec::new();
 
     for row in rows_iter {
-        let mut values: Vec<String> = row.iter().map(cell_to_string).collect();
+        let values: Vec<String> = row.iter().map(cell_to_string).collect();
         if values.iter().all(|value| value.is_empty()) {
             continue;
         }
