@@ -160,14 +160,14 @@ struct FacultyDatasetColumnConfiguration {
     program_columns: Vec<usize>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FacultyDatasetMetadata {
     analysis: FacultyDatasetAnalysis,
     memberships: Vec<FacultyProgramMembership>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FacultyProgramMembership {
     row_index: usize,
@@ -256,6 +256,7 @@ fn submit_matching_request(
     }
 
     let normalized_programs = normalize_programs(program_filters);
+    let mut allowed_faculty_rows: Option<HashSet<usize>> = None;
     let mut faculty_roster_path = None;
 
     if matches!(faculty_scope, FacultyScope::Custom) {
@@ -271,6 +272,20 @@ fn submit_matching_request(
 
     if matches!(faculty_scope, FacultyScope::Program) && normalized_programs.is_empty() {
         return Err("Provide at least one program to limit the faculty list.".into());
+    }
+
+    if matches!(faculty_scope, FacultyScope::Program) {
+        let metadata = load_faculty_dataset_metadata(&app_handle)?
+            .ok_or_else(|| {
+                "The faculty dataset metadata is unavailable. Refresh the dataset analysis before filtering by program.".to_string()
+            })?;
+        let filtered_rows =
+            filter_faculty_rows_by_program(&metadata.memberships, &normalized_programs);
+        if filtered_rows.is_empty() {
+            warnings
+                .push("No faculty members in the dataset matched the selected programs.".into());
+        }
+        allowed_faculty_rows = Some(filtered_rows);
     }
 
     if matches!(faculty_scope, FacultyScope::Custom) && faculty_roster_path.is_none() {
@@ -313,7 +328,12 @@ fn submit_matching_request(
 
         let limit = faculty_recs_per_student.max(1) as usize;
         let prompt_embedding = embed_prompt(&app_handle, &embedding_index, &prompt)?;
-        let matches = find_best_faculty_matches(&embedding_index, &prompt_embedding, limit);
+        let matches = find_best_faculty_matches(
+            &embedding_index,
+            &prompt_embedding,
+            limit,
+            allowed_faculty_rows.as_ref(),
+        );
 
         prompt_matches.push(PromptMatchResult {
             prompt,
@@ -463,6 +483,7 @@ fn find_best_faculty_matches(
     index: &FacultyEmbeddingIndex,
     prompt_embedding: &[f32],
     limit: usize,
+    allowed_rows: Option<&HashSet<usize>>,
 ) -> Vec<FacultyMatchResult> {
     if limit == 0 {
         return Vec::new();
@@ -472,6 +493,12 @@ fn find_best_faculty_matches(
         .entries
         .iter()
         .filter_map(|entry| {
+            if let Some(allowed) = allowed_rows {
+                if !allowed.contains(&entry.row_index) {
+                    return None;
+                }
+            }
+
             if entry.embedding.len() != prompt_embedding.len() {
                 return None;
             }
@@ -1946,6 +1973,52 @@ fn write_faculty_dataset_metadata(
     fs::write(&path, json)
         .map_err(|err| format!("Unable to persist faculty dataset metadata: {err}"))?;
     Ok(())
+}
+
+fn load_faculty_dataset_metadata(
+    app_handle: &tauri::AppHandle,
+) -> Result<Option<FacultyDatasetMetadata>, String> {
+    let path = metadata_path(app_handle)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let data = fs::read(&path)
+        .map_err(|err| format!("Unable to read the faculty dataset metadata: {err}"))?;
+    if data.is_empty() {
+        return Ok(None);
+    }
+
+    let metadata = serde_json::from_slice(&data)
+        .map_err(|err| format!("Unable to parse the faculty dataset metadata: {err}"))?;
+    Ok(Some(metadata))
+}
+
+fn filter_faculty_rows_by_program(
+    memberships: &[FacultyProgramMembership],
+    programs: &[String],
+) -> HashSet<usize> {
+    if programs.is_empty() {
+        return HashSet::new();
+    }
+
+    let normalized_filters: HashSet<String> = programs
+        .iter()
+        .map(|program| program.to_lowercase())
+        .collect();
+
+    let mut allowed_rows = HashSet::new();
+    for membership in memberships {
+        for program in &membership.programs {
+            let normalized_program = program.to_lowercase();
+            if normalized_filters.contains(&normalized_program) {
+                allowed_rows.insert(membership.row_index);
+                break;
+            }
+        }
+    }
+
+    allowed_rows
 }
 
 fn clear_faculty_dataset_metadata(app_handle: &tauri::AppHandle) -> Result<(), String> {
