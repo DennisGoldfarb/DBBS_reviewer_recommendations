@@ -1526,7 +1526,7 @@ function App() {
 
           <div className="button-row">
             <button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Validating…" : "Validate matching request"}
+              {isSubmitting ? "Matching…" : "Run matching"}
             </button>
             <button
               type="button"
@@ -1678,7 +1678,28 @@ function App() {
                           const identifierEntries = Object.entries(
                             faculty.identifiers,
                           );
-                          const hasIdentifiers = identifierEntries.length > 0;
+                          const identifierOrder =
+                            datasetStatus?.analysis?.identifierColumns ?? [];
+                          const sortedIdentifierEntries =
+                            identifierEntries.slice().sort((a, b) => {
+                              const indexA = identifierOrder.indexOf(a[0]);
+                              const indexB = identifierOrder.indexOf(b[0]);
+
+                              if (indexA !== -1 && indexB !== -1 && indexA !== indexB) {
+                                return indexA - indexB;
+                              }
+
+                              if (indexA !== -1 && indexB === -1) {
+                                return -1;
+                              }
+
+                              if (indexA === -1 && indexB !== -1) {
+                                return 1;
+                              }
+
+                              return a[0].localeCompare(b[0]);
+                            });
+                          const hasIdentifiers = sortedIdentifierEntries.length > 0;
 
                           return (
                             <li
@@ -1693,7 +1714,7 @@ function App() {
                               </div>
                               <div className="match-identifiers">
                                 {hasIdentifiers ? (
-                                  identifierEntries.map(([label, value]) => (
+                                  sortedIdentifierEntries.map(([label, value]) => (
                                     <span
                                       key={`${faculty.rowIndex}-${label}`}
                                       className="match-identifier"
