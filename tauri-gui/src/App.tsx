@@ -6,22 +6,7 @@ import "./App.css";
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
 type FacultyScope = "all" | "program" | "custom";
 
-const PROGRAM_OPTIONS = [
-  "Biochemistry, Biophysics, and Structural Biology",
-  "Biomedical Informatics and Data Science",
-  "Cancer Biology",
-  "Computational and Systems Biology",
-  "Developmental, Regenerative and Stem Cell Biology",
-  "Evolution, Ecology and Population Biology",
-  "Immunology",
-  "Molecular Cell Biology",
-  "Molecular Genetics and Genomics",
-  "Molecular Microbiology and Microbial Pathogenesis",
-  "Neurosciences",
-  "Plant & Microbial Biosciences",
-] as const;
-
-type ProgramName = (typeof PROGRAM_OPTIONS)[number];
+type ProgramName = string;
 
 interface PathConfirmation {
   label: string;
@@ -35,6 +20,13 @@ interface SpreadsheetPreview {
   suggestedIdentifierColumns: number[];
 }
 
+interface FacultyDatasetAnalysis {
+  embeddingColumns: string[];
+  identifierColumns: string[];
+  programColumns: string[];
+  availablePrograms: string[];
+}
+
 interface FacultyDatasetStatus {
   path: string | null;
   canonicalPath: string | null;
@@ -46,6 +38,7 @@ interface FacultyDatasetStatus {
   message: string | null;
   messageVariant: StatusMessage["variant"] | null;
   preview: SpreadsheetPreview | null;
+  analysis: FacultyDatasetAnalysis | null;
 }
 
 interface SubmissionDetails {
@@ -80,6 +73,7 @@ function App() {
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
+  const [availablePrograms, setAvailablePrograms] = useState<ProgramName[]>([]);
   const [selectedPrograms, setSelectedPrograms] = useState<ProgramName[]>([]);
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
@@ -155,6 +149,34 @@ function App() {
 
     loadStatus();
   }, [applyDatasetStatus]);
+
+  useEffect(() => {
+    if (!datasetStatus?.analysis) {
+      setAvailablePrograms([]);
+      setSelectedPrograms([]);
+      if (facultyScope === "program") {
+        setFacultyScope("all");
+      }
+      return;
+    }
+
+    const programs = [...datasetStatus.analysis.availablePrograms];
+    setAvailablePrograms(programs);
+    setSelectedPrograms((previous) => {
+      const filtered = previous.filter((program) => programs.includes(program));
+      if (
+        filtered.length === previous.length &&
+        filtered.every((value, index) => value === previous[index])
+      ) {
+        return previous;
+      }
+      return filtered;
+    });
+
+    if (programs.length === 0 && facultyScope === "program") {
+      setFacultyScope("all");
+    }
+  }, [datasetStatus, facultyScope]);
 
   const runEmbeddingRefresh = useCallback(
     async (statusForValidation: FacultyDatasetStatus | null) => {
@@ -298,6 +320,10 @@ function App() {
   };
 
   const handleFacultyScopeChange = (value: FacultyScope) => {
+    if (value === "program" && availablePrograms.length === 0) {
+      return;
+    }
+
     setFacultyScope(value);
     setError(null);
     setResult(null);
@@ -312,6 +338,10 @@ function App() {
   };
 
   const toggleProgramSelection = (program: ProgramName) => {
+    if (!availablePrograms.includes(program)) {
+      return;
+    }
+
     setSelectedPrograms((current) => {
       if (current.includes(program)) {
         return current.filter((entry) => entry !== program);
@@ -871,6 +901,9 @@ function App() {
                   name="faculty-scope"
                   value="program"
                   checked={facultyScope === "program"}
+                  disabled={
+                    isDatasetLoading || availablePrograms.length === 0
+                  }
                   onChange={() => handleFacultyScopeChange("program")}
                 />
                 <span>Limit to programs</span>
@@ -886,26 +919,40 @@ function App() {
                 <span>Provide a faculty list</span>
               </label>
             </div>
+            {availablePrograms.length === 0 &&
+              !isDatasetLoading &&
+              datasetStatus?.analysis && (
+                <p className="small-note">
+                  No program affiliations were detected in the active faculty
+                  dataset.
+                </p>
+              )}
 
             {facultyScope === "program" && (
               <div className="input-stack narrow-column">
                 <span className="input-heading">Programs or tracks</span>
                 <div className="program-checkbox-grid">
-                  {PROGRAM_OPTIONS.map((program) => {
-                    const isSelected = selectedPrograms.includes(program);
+                  {availablePrograms.length === 0 ? (
+                    <p className="small-note">
+                      No program columns were detected in the active dataset.
+                    </p>
+                  ) : (
+                    availablePrograms.map((program) => {
+                      const isSelected = selectedPrograms.includes(program);
 
-                    return (
-                      <label key={program} className="checkbox-option">
-                        <input
-                          type="checkbox"
-                          value={program}
-                          checked={isSelected}
-                          onChange={() => toggleProgramSelection(program)}
-                        />
-                        <span>{program}</span>
-                      </label>
-                    );
-                  })}
+                      return (
+                        <label key={program} className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            value={program}
+                            checked={isSelected}
+                            onChange={() => toggleProgramSelection(program)}
+                          />
+                          <span>{program}</span>
+                        </label>
+                      );
+                    })
+                  )}
                 </div>
                 <p className="small-note">
                   Select the programs that should be included in the faculty

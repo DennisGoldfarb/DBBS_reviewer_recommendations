@@ -2,7 +2,7 @@ use calamine::{open_workbook_auto, DataType, Reader};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor};
@@ -14,6 +14,7 @@ const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
 const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
 const FACULTY_DATASET_EXTENSIONS: &[&str] = &["tsv", "txt", "xlsx", "xls"];
 const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty_dataset.tsv");
+const FACULTY_DATASET_METADATA_NAME: &str = "faculty_dataset_metadata.json";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +121,31 @@ struct FacultyDatasetStatus {
     message: Option<String>,
     message_variant: Option<String>,
     preview: Option<SpreadsheetPreview>,
+    analysis: Option<FacultyDatasetAnalysis>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyDatasetAnalysis {
+    embedding_columns: Vec<String>,
+    identifier_columns: Vec<String>,
+    program_columns: Vec<String>,
+    available_programs: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyDatasetMetadata {
+    analysis: FacultyDatasetAnalysis,
+    memberships: Vec<FacultyProgramMembership>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyProgramMembership {
+    row_index: usize,
+    identifiers: HashMap<String, String>,
+    programs: Vec<String>,
 }
 
 #[tauri::command]
@@ -399,6 +425,17 @@ fn normalize_columns(columns: Vec<String>) -> Vec<String> {
 }
 
 fn read_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    read_spreadsheet_with_limit(path, Some(10))
+}
+
+fn read_full_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    read_spreadsheet_with_limit(path, None)
+}
+
+fn read_spreadsheet_with_limit(
+    path: &Path,
+    max_rows: Option<usize>,
+) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -406,13 +443,16 @@ fn read_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), Stri
         .to_lowercase();
 
     if matches!(extension.as_str(), "xlsx" | "xlsm" | "xls" | "xlsb") {
-        read_excel_spreadsheet(path)
+        read_excel_spreadsheet_with_limit(path, max_rows)
     } else {
-        read_delimited_spreadsheet(path)
+        read_delimited_spreadsheet_with_limit(path, max_rows)
     }
 }
 
-fn read_delimited_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+fn read_delimited_spreadsheet_with_limit(
+    path: &Path,
+    max_rows: Option<usize>,
+) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let delimiter = detect_delimiter(path)?;
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
@@ -439,8 +479,10 @@ fn read_delimited_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<Strin
             continue;
         }
         rows.push(values);
-        if rows.len() >= 10 {
-            break;
+        if let Some(limit) = max_rows {
+            if rows.len() >= limit {
+                break;
+            }
         }
     }
 
@@ -448,7 +490,10 @@ fn read_delimited_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<Strin
     Ok((headers, rows))
 }
 
-fn read_excel_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+fn read_excel_spreadsheet_with_limit(
+    path: &Path,
+    max_rows: Option<usize>,
+) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let mut workbook =
         open_workbook_auto(path).map_err(|err| format!("Unable to open the spreadsheet: {err}"))?;
 
@@ -477,8 +522,10 @@ fn read_excel_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>)
             continue;
         }
         rows.push(values);
-        if rows.len() >= 10 {
-            break;
+        if let Some(limit) = max_rows {
+            if rows.len() >= limit {
+                break;
+            }
         }
     }
 
@@ -562,9 +609,11 @@ fn build_faculty_dataset_status(
         message: None,
         message_variant: None,
         preview: None,
+        analysis: None,
     };
 
     if !dataset_path.exists() {
+        let _ = clear_faculty_dataset_metadata(app_handle);
         status.message = Some(
             "No faculty dataset has been configured. Restore the default file to continue.".into(),
         );
@@ -624,7 +673,264 @@ fn build_faculty_dataset_status(
         }
     }
 
+    if status.is_valid {
+        match analyze_faculty_dataset(app_handle, &dataset_path) {
+            Ok(analysis) => {
+                status.analysis = Some(analysis);
+            }
+            Err(err) => {
+                let _ = clear_faculty_dataset_metadata(app_handle);
+                status.analysis = None;
+                status.is_valid = false;
+                if status.message.is_none() {
+                    status.message = Some(err);
+                    status.message_variant = Some("error".into());
+                }
+            }
+        }
+    } else if status.analysis.is_some() {
+        status.analysis = None;
+    }
+
+    if !status.is_valid {
+        if let Err(err) = clear_faculty_dataset_metadata(app_handle) {
+            if status.message.is_none() {
+                status.message = Some(err);
+                status.message_variant = Some("error".into());
+            }
+        }
+    }
+
     Ok(status)
+}
+
+fn analyze_faculty_dataset(
+    app_handle: &tauri::AppHandle,
+    dataset_path: &Path,
+) -> Result<FacultyDatasetAnalysis, String> {
+    let (mut headers, mut rows) = read_full_spreadsheet(dataset_path)?;
+    if headers.is_empty() {
+        return Err("The faculty dataset does not include any columns.".into());
+    }
+
+    align_row_lengths(&mut headers, &mut rows);
+
+    let (embedding_indexes, identifier_indexes) = suggest_spreadsheet_columns(&headers, &rows);
+    let program_indexes = suggest_program_columns(&headers, &rows);
+
+    let analysis = FacultyDatasetAnalysis {
+        embedding_columns: indexes_to_headers(&headers, &embedding_indexes),
+        identifier_columns: indexes_to_headers(&headers, &identifier_indexes),
+        program_columns: indexes_to_headers(&headers, &program_indexes),
+        available_programs: collect_program_values(&rows, &program_indexes),
+    };
+
+    let memberships =
+        build_faculty_program_memberships(&headers, &rows, &identifier_indexes, &program_indexes);
+
+    write_faculty_dataset_metadata(app_handle, &analysis, &memberships)?;
+
+    Ok(analysis)
+}
+
+fn suggest_program_columns(headers: &[String], rows: &[Vec<String>]) -> Vec<usize> {
+    const PROGRAM_KEYWORDS: &[&str] = &["program", "track", "pathway", "division", "department"];
+
+    let mut program_columns: Vec<usize> = headers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, header)| {
+            let lower = header.to_lowercase();
+            if lower.is_empty() {
+                return None;
+            }
+            if PROGRAM_KEYWORDS
+                .iter()
+                .any(|keyword| lower.contains(keyword))
+            {
+                Some(index)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    sort_and_dedup(&mut program_columns);
+
+    if !program_columns.is_empty() {
+        return program_columns;
+    }
+
+    let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
+
+    for (index, header) in headers.iter().enumerate() {
+        if header.trim().is_empty() {
+            continue;
+        }
+
+        let mut unique = BTreeSet::new();
+        let mut non_empty = 0usize;
+
+        for row in rows {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                non_empty += 1;
+                unique.insert(trimmed.to_lowercase());
+            }
+        }
+
+        if non_empty == 0 {
+            continue;
+        }
+
+        let unique_count = unique.len();
+        if unique_count > 0 && unique_count <= 25 {
+            candidates.push((index, unique_count, non_empty));
+        }
+    }
+
+    candidates.sort_by(|a, b| a.1.cmp(&b.1).then(b.2.cmp(&a.2)));
+
+    for (index, _, _) in candidates.into_iter().take(4) {
+        program_columns.push(index);
+    }
+
+    sort_and_dedup(&mut program_columns);
+    program_columns
+}
+
+fn indexes_to_headers(headers: &[String], indexes: &[usize]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut seen = HashSet::new();
+
+    for &index in indexes {
+        if index >= headers.len() {
+            continue;
+        }
+
+        let label = header_label(headers, index);
+        let key = label.to_lowercase();
+        if seen.insert(key) {
+            values.push(label);
+        }
+    }
+
+    values
+}
+
+fn header_label(headers: &[String], index: usize) -> String {
+    headers
+        .get(index)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| format!("Column {}", index + 1))
+}
+
+fn collect_program_values(rows: &[Vec<String>], program_indexes: &[usize]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut values = Vec::new();
+
+    for row in rows {
+        for &index in program_indexes {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let key = trimmed.to_lowercase();
+                if seen.insert(key) {
+                    values.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    values.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    values
+}
+
+fn build_faculty_program_memberships(
+    headers: &[String],
+    rows: &[Vec<String>],
+    identifier_indexes: &[usize],
+    program_indexes: &[usize],
+) -> Vec<FacultyProgramMembership> {
+    let mut memberships = Vec::new();
+
+    for (row_index, row) in rows.iter().enumerate() {
+        let mut identifiers = HashMap::new();
+        for &index in identifier_indexes {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let label = header_label(headers, index);
+                identifiers
+                    .entry(label)
+                    .or_insert_with(|| trimmed.to_string());
+            }
+        }
+
+        let mut program_set = BTreeSet::new();
+        for &index in program_indexes {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                program_set.insert(trimmed.to_string());
+            }
+        }
+
+        if identifiers.is_empty() && program_set.is_empty() {
+            continue;
+        }
+
+        memberships.push(FacultyProgramMembership {
+            row_index,
+            identifiers,
+            programs: program_set.into_iter().collect(),
+        });
+    }
+
+    memberships
+}
+
+fn metadata_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = dataset_directory(app_handle)?;
+    Ok(directory.join(FACULTY_DATASET_METADATA_NAME))
+}
+
+fn write_faculty_dataset_metadata(
+    app_handle: &tauri::AppHandle,
+    analysis: &FacultyDatasetAnalysis,
+    memberships: &[FacultyProgramMembership],
+) -> Result<(), String> {
+    let path = metadata_path(app_handle)?;
+    ensure_dataset_directory(&path)?;
+    let payload = FacultyDatasetMetadata {
+        analysis: analysis.clone(),
+        memberships: memberships.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&payload)
+        .map_err(|err| format!("Unable to serialize faculty dataset metadata: {err}"))?;
+    fs::write(&path, json)
+        .map_err(|err| format!("Unable to persist faculty dataset metadata: {err}"))?;
+    Ok(())
+}
+
+fn clear_faculty_dataset_metadata(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    let path = metadata_path(app_handle)?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|err| format!("Unable to clear faculty dataset metadata: {err}"))?;
+    }
+    Ok(())
 }
 
 fn dataset_destination(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
