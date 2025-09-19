@@ -38,6 +38,49 @@
   --washu-info-shadow-strong: rgba(0, 95, 158, 0.26);
   --washu-overlay: rgba(46, 45, 41, 0.35);
   --washu-focus-ring: rgba(173, 0, 0, 0.2);
+  --washu-button-text: #ffffff;
+  --washu-info-border-strong: rgba(0, 95, 158, 0.35);
+  --washu-danger-border-strong: rgba(140, 28, 19, 0.4);
+}
+
+:root[data-theme="dark"] {
+  color: #e2e8f0;
+  background-color: #0f172a;
+
+  --washu-page: #0f172a;
+  --washu-page-strong: #0b1120;
+  --washu-surface: #1e293b;
+  --washu-surface-muted: #111827;
+  --washu-border: #334155;
+  --washu-border-strong: #1f2937;
+  --washu-text: #e2e8f0;
+  --washu-heading: #f8fafc;
+  --washu-text-muted: #cbd5f5;
+  --washu-primary: #2563eb;
+  --washu-primary-dark: #1d4ed8;
+  --washu-primary-soft: rgba(37, 99, 235, 0.2);
+  --washu-accent: #1d4ed8;
+  --washu-accent-soft: rgba(59, 130, 246, 0.16);
+  --washu-info: #0ea5e9;
+  --washu-info-soft: rgba(14, 165, 233, 0.18);
+  --washu-warning: #f59e0b;
+  --washu-warning-soft: rgba(245, 158, 11, 0.2);
+  --washu-danger: #fecaca;
+  --washu-danger-soft: rgba(220, 38, 38, 0.22);
+  --washu-shadow-soft: rgba(15, 23, 42, 0.35);
+  --washu-shadow: rgba(15, 23, 42, 0.45);
+  --washu-shadow-strong: rgba(2, 6, 23, 0.65);
+  --washu-primary-shadow: rgba(37, 99, 235, 0.25);
+  --washu-primary-shadow-strong: rgba(37, 99, 235, 0.35);
+  --washu-accent-shadow: rgba(15, 23, 42, 0.25);
+  --washu-accent-shadow-strong: rgba(15, 23, 42, 0.35);
+  --washu-info-shadow: rgba(14, 165, 233, 0.2);
+  --washu-info-shadow-strong: rgba(14, 165, 233, 0.35);
+  --washu-overlay: rgba(15, 23, 42, 0.7);
+  --washu-focus-ring: rgba(37, 99, 235, 0.35);
+  --washu-button-text: #f8fafc;
+  --washu-info-border-strong: rgba(56, 189, 248, 0.35);
+  --washu-danger-border-strong: rgba(248, 113, 113, 0.35);
 }
 
 body,
@@ -56,6 +99,14 @@ html {
   max-width: 1080px;
   margin: 0 auto;
   padding: 2.5rem 1.25rem 3.25rem;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .page-header h1 {
@@ -199,7 +250,7 @@ button {
   font-weight: 600;
   cursor: pointer;
   background: var(--washu-primary);
-  color: #ffffff;
+  color: var(--washu-button-text);
   transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
   box-shadow: 0 10px 24px var(--washu-primary-shadow);
 }
@@ -249,6 +300,55 @@ button.add-entry-button:not(:disabled):hover {
   box-shadow: 0 14px 28px var(--washu-info-shadow-strong);
 }
 
+button.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.6rem 1.1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: var(--washu-surface);
+  color: var(--washu-heading);
+  border: 1px solid var(--washu-border);
+  box-shadow: 0 8px 18px var(--washu-shadow-soft);
+  transform: none;
+}
+
+button.theme-toggle:not(:disabled):hover {
+  transform: none;
+  border-color: var(--washu-primary);
+  color: var(--washu-primary);
+  box-shadow: 0 12px 26px var(--washu-shadow);
+}
+
+button.theme-toggle:focus-visible {
+  outline: none;
+  border-color: var(--washu-primary);
+  box-shadow: 0 0 0 3px var(--washu-focus-ring);
+}
+
+.theme-toggle-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.theme-toggle-text {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.theme-toggle-text .theme-toggle-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.theme-toggle-text .theme-toggle-action {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--washu-text-muted);
+}
+
 .path-preview {
   font-size: 0.95rem;
   color: var(--washu-text-muted);
@@ -271,7 +371,7 @@ button.add-entry-button:not(:disabled):hover {
   padding: 0.7rem 0.95rem;
   border-radius: 12px;
   background: var(--washu-danger-soft);
-  border: 1px solid var(--washu-border-strong);
+  border: 1px solid var(--washu-danger-border-strong);
   color: var(--washu-danger);
   font-size: 0.9rem;
 }
@@ -491,13 +591,13 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-message-info {
   background: var(--washu-info-soft);
   color: var(--washu-info);
-  border: 1px solid rgba(0, 95, 158, 0.35);
+  border: 1px solid var(--washu-info-border-strong);
 }
 
 .dataset-message-error {
   background: var(--washu-danger-soft);
   color: var(--washu-danger);
-  border: 1px solid rgba(140, 28, 19, 0.4);
+  border: 1px solid var(--washu-danger-border-strong);
 }
 
 .dataset-actions {
