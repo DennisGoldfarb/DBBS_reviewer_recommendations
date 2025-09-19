@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -201,6 +201,7 @@ function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
   const [documentPath, setDocumentPath] = useState("");
+  const [isDocumentDragActive, setIsDocumentDragActive] = useState(false);
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
@@ -677,6 +678,51 @@ function App() {
     }
   };
 
+  const handleDocumentPathChange = (value: string) => {
+    setDocumentPath(value);
+    setError(null);
+    setResult(null);
+  };
+
+  const handleDocumentDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDocumentDragActive(true);
+  };
+
+  const handleDocumentDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsDocumentDragActive(true);
+  };
+
+  const handleDocumentDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setIsDocumentDragActive(false);
+    }
+  };
+
+  const handleDocumentDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDocumentDragActive(false);
+
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    const file = files[0] as File & { path?: string };
+    if (file.path && file.path.trim().length > 0) {
+      handleDocumentPathChange(file.path);
+      return;
+    }
+
+    setError(
+      "Unable to access the dropped file path. Use the Browse button to select the document instead.",
+    );
+  };
+
   const handleSpreadsheetPathInput = (value: string) => {
     setSpreadsheetPath(value);
     setError(null);
@@ -1041,7 +1087,7 @@ function App() {
                     type="button"
                     className="secondary"
                     onClick={() =>
-                      handleFileSelection(setDocumentPath, {
+                      handleFileSelection(handleDocumentPathChange, {
                         multiple: false,
                         filters: [
                           {
@@ -1057,9 +1103,27 @@ function App() {
                   <input
                     type="text"
                     value={documentPath}
-                    onChange={(event) => setDocumentPath(event.target.value)}
+                    onChange={(event) =>
+                      handleDocumentPathChange(event.target.value)
+                    }
                     placeholder="Paste or confirm the document path"
                   />
+                </div>
+                <div
+                  className={`document-drop-zone${
+                    isDocumentDragActive ? " drag-active" : ""
+                  }`}
+                  onDragEnter={handleDocumentDragEnter}
+                  onDragOver={handleDocumentDragOver}
+                  onDragLeave={handleDocumentDragLeave}
+                  onDrop={handleDocumentDrop}
+                >
+                  <span className="drop-zone-primary">
+                    Drag and drop a PDF, Word document, or text file here
+                  </span>
+                  <span className="drop-zone-secondary">
+                    or use the Browse button to choose a file
+                  </span>
                 </div>
                 {documentPath && (
                   <div className="path-preview">{documentPath}</div>
