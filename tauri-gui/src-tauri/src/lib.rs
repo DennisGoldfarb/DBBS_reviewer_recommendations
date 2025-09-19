@@ -18,6 +18,8 @@ const DEFAULT_FACULTY_DATASET: &[u8] = include_bytes!("../assets/default_faculty
 const FACULTY_DATASET_METADATA_NAME: &str = "faculty_dataset_metadata.json";
 const FACULTY_DATASET_SOURCE_NAME: &str = "faculty_dataset_source.txt";
 const FACULTY_EMBEDDINGS_NAME: &str = "faculty_embeddings.json";
+const DEFAULT_FACULTY_EMBEDDINGS: &[u8] =
+    include_bytes!("../assets/default_faculty_embeddings.json");
 const DEFAULT_EMBEDDING_MODEL: &str = "NeuML/pubmedbert-base-embeddings";
 const FACULTY_EMBEDDING_PROGRESS_EVENT: &str = "faculty-embedding-progress";
 
@@ -100,6 +102,7 @@ struct SubmissionResponse {
     summary: String,
     warnings: Vec<String>,
     details: SubmissionDetails,
+    prompt_matches: Vec<PromptMatchResult>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -173,7 +176,10 @@ struct FacultyProgramMembership {
 }
 
 #[tauri::command]
-fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionResponse, String> {
+fn submit_matching_request(
+    app_handle: tauri::AppHandle,
+    payload: SubmissionPayload,
+) -> Result<SubmissionResponse, String> {
     let SubmissionPayload {
         task_type,
         prompt_text,
@@ -198,6 +204,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
     let mut prompt_preview = None;
     let mut selected_prompt_columns = Vec::new();
     let mut selected_identifier_columns = Vec::new();
+    let mut prepared_prompt_text: Option<String> = None;
 
     match task_type {
         TaskType::Prompt => {
@@ -206,6 +213,7 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
                 return Err("Provide a prompt describing the student's interests.".into());
             }
             prompt_preview = Some(build_prompt_preview(text));
+            prepared_prompt_text = Some(text.to_string());
         }
         TaskType::Document => {
             let document = resolve_existing_path(document_path, false, "Single document")?;
@@ -294,10 +302,30 @@ fn submit_matching_request(payload: SubmissionPayload) -> Result<SubmissionRespo
         faculty_roster_path.is_some(),
     );
 
+    let mut prompt_matches = Vec::new();
+    if let (TaskType::Prompt, Some(prompt)) = (&task_type, prepared_prompt_text) {
+        let embedding_index = load_faculty_embedding_index(&app_handle)?;
+        if embedding_index.entries.is_empty() {
+            return Err(
+                "No faculty embeddings are available. Generate embeddings before matching.".into(),
+            );
+        }
+
+        let limit = faculty_recs_per_student.max(1) as usize;
+        let prompt_embedding = embed_prompt(&app_handle, &embedding_index, &prompt)?;
+        let matches = find_best_faculty_matches(&embedding_index, &prompt_embedding, limit);
+
+        prompt_matches.push(PromptMatchResult {
+            prompt,
+            faculty_matches: matches,
+        });
+    }
+
     Ok(SubmissionResponse {
         summary,
         warnings,
         details,
+        prompt_matches,
     })
 }
 
@@ -330,7 +358,7 @@ struct EmbeddingResponseRow {
     embedding: Vec<f32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FacultyEmbeddingEntry {
     row_index: usize,
@@ -338,18 +366,159 @@ struct FacultyEmbeddingEntry {
     embedding: Vec<f32>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FacultyEmbeddingIndex {
     model: String,
-    generated_at: String,
+    #[serde(default)]
+    generated_at: Option<String>,
     dimension: usize,
-    total_rows: usize,
-    embedded_rows: usize,
-    skipped_rows: usize,
+    #[serde(default)]
+    total_rows: Option<usize>,
+    #[serde(default)]
+    embedded_rows: Option<usize>,
+    #[serde(default)]
+    skipped_rows: Option<usize>,
+    #[serde(default)]
     embedding_columns: Vec<String>,
+    #[serde(default)]
     identifier_columns: Vec<String>,
     entries: Vec<FacultyEmbeddingEntry>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PromptMatchResult {
+    prompt: String,
+    faculty_matches: Vec<FacultyMatchResult>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyMatchResult {
+    row_index: usize,
+    similarity: f32,
+    identifiers: HashMap<String, String>,
+}
+
+fn load_faculty_embedding_index(
+    app_handle: &tauri::AppHandle,
+) -> Result<FacultyEmbeddingIndex, String> {
+    let embeddings_path = dataset_directory(app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
+    let data = if embeddings_path.exists() {
+        fs::read(&embeddings_path)
+            .map_err(|err| format!("Unable to read faculty embeddings: {err}"))?
+    } else {
+        DEFAULT_FACULTY_EMBEDDINGS.to_vec()
+    };
+
+    serde_json::from_slice(&data)
+        .map_err(|err| format!("Unable to parse faculty embeddings: {err}"))
+}
+
+fn embed_prompt(
+    app_handle: &tauri::AppHandle,
+    index: &FacultyEmbeddingIndex,
+    prompt: &str,
+) -> Result<Vec<f32>, String> {
+    let model = if index.model.trim().is_empty() {
+        DEFAULT_EMBEDDING_MODEL.to_string()
+    } else {
+        index.model.clone()
+    };
+
+    let payload = EmbeddingRequestPayload {
+        model,
+        texts: vec![EmbeddingRequestRow {
+            id: 0,
+            text: prompt.to_string(),
+        }],
+    };
+
+    let response = run_embedding_helper(app_handle, &payload)?;
+    if response.rows.is_empty() {
+        return Err("The embedding helper did not return an embedding for the prompt.".into());
+    }
+
+    let embedding = response.rows.into_iter().next().unwrap().embedding;
+    if embedding.len() != index.dimension {
+        return Err(format!(
+            "The prompt embedding dimension ({}) does not match the faculty embedding dimension ({}).",
+            embedding.len(),
+            index.dimension
+        ));
+    }
+
+    if response.dimension != index.dimension {
+        return Err(format!(
+            "The embedding helper reported dimension {} but the faculty index uses {}.",
+            response.dimension, index.dimension
+        ));
+    }
+
+    Ok(embedding)
+}
+
+fn find_best_faculty_matches(
+    index: &FacultyEmbeddingIndex,
+    prompt_embedding: &[f32],
+    limit: usize,
+) -> Vec<FacultyMatchResult> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<FacultyMatchResult> = index
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            if entry.embedding.len() != prompt_embedding.len() {
+                return None;
+            }
+
+            let similarity = cosine_similarity(prompt_embedding, &entry.embedding)?;
+            let mut identifiers = entry.identifiers.clone();
+            identifiers.retain(|_, value| !value.trim().is_empty());
+
+            Some(FacultyMatchResult {
+                row_index: entry.row_index,
+                similarity,
+                identifiers,
+            })
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(Ordering::Equal)
+    });
+    candidates.truncate(limit);
+    candidates
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
+    if a.len() != b.len() || a.is_empty() {
+        return None;
+    }
+
+    let mut dot = 0.0f64;
+    let mut norm_a = 0.0f64;
+    let mut norm_b = 0.0f64;
+
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let xf = f64::from(x);
+        let yf = f64::from(y);
+        dot += xf * yf;
+        norm_a += xf * xf;
+        norm_b += yf * yf;
+    }
+
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return None;
+    }
+
+    Some((dot / (norm_a.sqrt() * norm_b.sqrt())) as f32)
 }
 
 struct RowEmbeddingContext {
@@ -626,11 +795,11 @@ fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<Str
 
     let index = FacultyEmbeddingIndex {
         model: response_model,
-        generated_at: Utc::now().to_rfc3339(),
+        generated_at: Some(Utc::now().to_rfc3339()),
         dimension: response_dimension,
-        total_rows,
-        embedded_rows,
-        skipped_rows,
+        total_rows: Some(total_rows),
+        embedded_rows: Some(embedded_rows),
+        skipped_rows: Some(skipped_rows),
         embedding_columns: analysis.embedding_columns.clone(),
         identifier_columns: analysis.identifier_columns.clone(),
         entries,
