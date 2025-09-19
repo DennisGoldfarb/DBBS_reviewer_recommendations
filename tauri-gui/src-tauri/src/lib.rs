@@ -5,10 +5,10 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use tauri::Manager;
 
 const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
@@ -19,6 +19,7 @@ const FACULTY_DATASET_METADATA_NAME: &str = "faculty_dataset_metadata.json";
 const FACULTY_DATASET_SOURCE_NAME: &str = "faculty_dataset_source.txt";
 const FACULTY_EMBEDDINGS_NAME: &str = "faculty_embeddings.json";
 const DEFAULT_EMBEDDING_MODEL: &str = "NeuML/pubmedbert-base-embeddings";
+const FACULTY_EMBEDDING_PROGRESS_EVENT: &str = "faculty-embedding-progress";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -357,8 +358,66 @@ struct RowEmbeddingContext {
     identifiers: HashMap<String, String>,
 }
 
+fn default_progress_phase() -> String {
+    "embedding".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingProgressUpdate {
+    #[serde(default = "default_progress_phase")]
+    phase: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(default)]
+    processed_rows: usize,
+    #[serde(default)]
+    total_rows: usize,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed_seconds: Option<f64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_remaining_seconds: Option<f64>,
+}
+
+fn emit_faculty_embedding_progress(
+    app_handle: &tauri::AppHandle,
+    progress: EmbeddingProgressUpdate,
+) {
+    let _ = app_handle.emit_all(FACULTY_EMBEDDING_PROGRESS_EVENT, progress);
+}
+
+fn emit_embedding_error(app_handle: &tauri::AppHandle, total_rows: usize, message: &str) {
+    emit_faculty_embedding_progress(
+        app_handle,
+        EmbeddingProgressUpdate {
+            phase: "error".into(),
+            message: Some(message.to_string()),
+            processed_rows: 0,
+            total_rows,
+            elapsed_seconds: None,
+            estimated_remaining_seconds: None,
+        },
+    );
+}
+
 #[tauri::command]
 fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let started_at = Instant::now();
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "starting".into(),
+            message: Some("Preparing to refresh faculty embeddings…".into()),
+            processed_rows: 0,
+            total_rows: 0,
+            elapsed_seconds: Some(0.0),
+            estimated_remaining_seconds: None,
+        },
+    );
+
     let status = build_faculty_dataset_status(&app_handle)?;
 
     if !status.is_valid {
@@ -382,6 +441,22 @@ fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, Str
     if rows.is_empty() {
         return Err("The faculty dataset does not include any data rows to embed.".into());
     }
+
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "preparing".into(),
+            message: Some(format!(
+                "Scanning {row_count} faculty row{plural} for embedding content…",
+                row_count = rows.len(),
+                plural = if rows.len() == 1 { "" } else { "s" }
+            )),
+            processed_rows: 0,
+            total_rows: rows.len(),
+            elapsed_seconds: Some(started_at.elapsed().as_secs_f64()),
+            estimated_remaining_seconds: None,
+        },
+    );
 
     let header_map = build_header_index_map(&headers);
     let embedding_indexes = indexes_from_labels(&header_map, &analysis.embedding_columns)?;
@@ -438,6 +513,23 @@ fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, Str
         return Err("None of the faculty rows include embedding content. Add research interest details before refreshing embeddings.".into());
     }
 
+    let total_contexts = contexts.len();
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "preparing".into(),
+            message: Some(format!(
+                "Prepared {total} faculty row{plural} for embedding.",
+                total = total_contexts,
+                plural = if total_contexts == 1 { "" } else { "s" }
+            )),
+            processed_rows: 0,
+            total_rows: total_contexts,
+            elapsed_seconds: Some(started_at.elapsed().as_secs_f64()),
+            estimated_remaining_seconds: None,
+        },
+    );
+
     let request_payload = EmbeddingRequestPayload {
         model: DEFAULT_EMBEDDING_MODEL.to_string(),
         texts: contexts
@@ -449,16 +541,51 @@ fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, Str
             .collect(),
     };
 
-    let response = run_embedding_helper(&request_payload)?;
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "embedding".into(),
+            message: Some(format!(
+                "Starting embeddings for {total} faculty row{plural}…",
+                total = total_contexts,
+                plural = if total_contexts == 1 { "" } else { "s" }
+            )),
+            processed_rows: 0,
+            total_rows: total_contexts,
+            elapsed_seconds: Some(started_at.elapsed().as_secs_f64()),
+            estimated_remaining_seconds: None,
+        },
+    );
+
+    let response = run_embedding_helper(&app_handle, &request_payload)?;
 
     if response.dimension == 0 || response.rows.is_empty() {
         return Err("The embedding helper returned an empty result. Verify the Python environment can load the PubMedBERT model.".into());
     }
 
+    let EmbeddingResponsePayload {
+        model: response_model,
+        dimension: response_dimension,
+        rows: response_rows,
+    } = response;
+
     let mut embedding_map: HashMap<usize, Vec<f32>> = HashMap::new();
-    for row in response.rows {
+    let helper_row_count = response_rows.len();
+    for row in response_rows {
         embedding_map.insert(row.id, row.embedding);
     }
+
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "processing-results".into(),
+            message: Some("Aligning embeddings with faculty rows…".into()),
+            processed_rows: helper_row_count,
+            total_rows: total_contexts,
+            elapsed_seconds: Some(started_at.elapsed().as_secs_f64()),
+            estimated_remaining_seconds: None,
+        },
+    );
 
     let mut entries = Vec::new();
     let mut missing_embeddings = 0usize;
@@ -489,9 +616,9 @@ fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, Str
     let skipped_rows = total_rows.saturating_sub(embedded_rows);
 
     let index = FacultyEmbeddingIndex {
-        model: response.model,
+        model: response_model,
         generated_at: Utc::now().to_rfc3339(),
-        dimension: response.dimension,
+        dimension: response_dimension,
         total_rows,
         embedded_rows,
         skipped_rows,
@@ -502,6 +629,19 @@ fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, Str
 
     let embeddings_path = dataset_directory(&app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
     ensure_dataset_directory(&embeddings_path)?;
+
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "saving".into(),
+            message: Some("Saving faculty embedding index…".into()),
+            processed_rows: embedded_rows,
+            total_rows: total_contexts,
+            elapsed_seconds: Some(started_at.elapsed().as_secs_f64()),
+            estimated_remaining_seconds: None,
+        },
+    );
+
     let json = serde_json::to_string_pretty(&index)
         .map_err(|err| format!("Unable to serialize faculty embeddings: {err}"))?;
     fs::write(&embeddings_path, json)
@@ -530,6 +670,18 @@ fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, Str
         " Saved the embedding index to {}.",
         embeddings_path.to_string_lossy()
     ));
+
+    emit_faculty_embedding_progress(
+        &app_handle,
+        EmbeddingProgressUpdate {
+            phase: "complete".into(),
+            message: Some(message.clone()),
+            processed_rows: embedded_rows,
+            total_rows: total_contexts,
+            elapsed_seconds: Some(started_at.elapsed().as_secs_f64()),
+            estimated_remaining_seconds: None,
+        },
+    );
 
     Ok(message)
 }
@@ -571,53 +723,139 @@ fn indexes_from_labels(
 }
 
 fn run_embedding_helper(
+    app_handle: &tauri::AppHandle,
     payload: &EmbeddingRequestPayload,
 ) -> Result<EmbeddingResponsePayload, String> {
+    let total_rows = payload.texts.len();
     let mut child = spawn_python_helper()?;
     let input = serde_json::to_vec(payload)
         .map_err(|err| format!("Unable to serialize the embedding request: {err}"))?;
 
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(&input)
-            .map_err(|err| format!("Unable to send data to the embedding helper: {err}"))?;
-    } else {
-        return Err("Unable to access the embedding helper stdin.".into());
-    }
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Unable to access the embedding helper stdin.".to_string())?;
+    stdin
+        .write_all(&input)
+        .map_err(|err| format!("Unable to send data to the embedding helper: {err}"))?;
+    stdin
+        .flush()
+        .map_err(|err| format!("Unable to flush embedding helper input: {err}"))?;
+    drop(stdin);
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| format!("Unable to read embedding helper output: {err}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Unable to access the embedding helper stdout.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Unable to access the embedding helper stderr.".to_string())?;
 
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr);
+    let stdout_handle = std::thread::spawn(move || -> Result<Vec<u8>, String> {
+        let mut buffer = Vec::new();
+        let mut reader = BufReader::new(stdout);
+        reader
+            .read_to_end(&mut buffer)
+            .map_err(|err| format!("Unable to read embedding helper stdout: {err}"))?;
+        Ok(buffer)
+    });
+
+    let app_handle_for_progress = app_handle.clone();
+    let total_rows_for_progress = total_rows;
+    let stderr_handle = std::thread::spawn(move || -> Result<Vec<u8>, String> {
+        let mut reader = BufReader::new(stderr);
+        let mut buffer = Vec::new();
+
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Some(json_str) = line.strip_prefix("PROGRESS ") {
+                        match serde_json::from_str::<EmbeddingProgressUpdate>(json_str.trim()) {
+                            Ok(mut update) => {
+                                if update.total_rows == 0 {
+                                    update.total_rows = total_rows_for_progress;
+                                }
+                                emit_faculty_embedding_progress(&app_handle_for_progress, update);
+                            }
+                            Err(_) => {
+                                buffer.extend_from_slice(line.as_bytes());
+                            }
+                        }
+                    } else {
+                        buffer.extend_from_slice(line.as_bytes());
+                    }
+                }
+                Err(err) => {
+                    return Err(format!("Unable to read embedding helper stderr: {err}"));
+                }
+            }
+        }
+
+        Ok(buffer)
+    });
+
+    let status = child
+        .wait()
+        .map_err(|err| format!("Unable to wait for the embedding helper: {err}"))?;
+
+    let stdout_bytes = match stdout_handle.join() {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err("Unable to join the embedding helper stdout reader.".into());
+        }
+    };
+
+    let stderr_bytes = match stderr_handle.join() {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err("Unable to join the embedding helper stderr reader.".into());
+        }
+    };
+
+    if !status.success() {
+        let message = String::from_utf8_lossy(&stderr_bytes);
         let trimmed = message.trim();
-        if trimmed.is_empty() {
-            return Err("The embedding helper exited with an error.".into());
-        }
-        return Err(trimmed.to_string());
-    }
-
-    if output.stdout.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let trimmed = stderr.trim();
-        if trimmed.is_empty() {
-            return Err("The embedding helper did not produce any output.".into());
-        }
-        return Err(trimmed.to_string());
-    }
-
-    serde_json::from_slice(&output.stdout).map_err(|err| {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.trim().is_empty() {
-            format!("Unable to parse embedding helper output: {err}")
+        let error_message = if trimmed.is_empty() {
+            "The embedding helper exited with an error.".to_string()
         } else {
-            format!(
-                "Unable to parse embedding helper output: {err}. Details: {}",
-                stderr.trim()
-            )
+            trimmed.to_string()
+        };
+        emit_embedding_error(app_handle, total_rows, &error_message);
+        return Err(error_message);
+    }
+
+    if stdout_bytes.is_empty() {
+        let stderr_message = String::from_utf8_lossy(&stderr_bytes);
+        let trimmed = stderr_message.trim();
+        let error_message = if trimmed.is_empty() {
+            "The embedding helper did not produce any output.".to_string()
+        } else {
+            trimmed.to_string()
+        };
+        emit_embedding_error(app_handle, total_rows, &error_message);
+        return Err(error_message);
+    }
+
+    match serde_json::from_slice(&stdout_bytes) {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            let stderr_message = String::from_utf8_lossy(&stderr_bytes);
+            let trimmed = stderr_message.trim();
+            let error_message = if trimmed.is_empty() {
+                format!("Unable to parse embedding helper output: {err}")
+            } else {
+                format!(
+                    "Unable to parse embedding helper output: {err}. Details: {}",
+                    trimmed
+                )
+            };
+            emit_embedding_error(app_handle, total_rows, &error_message);
+            Err(error_message)
         }
-    })
+    }
 }
 
 fn spawn_python_helper() -> Result<Child, String> {
@@ -654,6 +892,7 @@ const PYTHON_EMBEDDING_HELPER: &str = r#"
 import json
 import os
 import sys
+import time
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
@@ -675,6 +914,11 @@ except ImportError as exc:
 hf_logging.set_verbosity_error()
 
 
+def emit_progress(payload: dict) -> None:
+    sys.stderr.write("PROGRESS " + json.dumps(payload) + "\n")
+    sys.stderr.flush()
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -684,14 +928,36 @@ def main():
 
     model_name = payload.get("model") or "NeuML/pubmedbert-base-embeddings"
     texts = payload.get("texts") or []
+    total = len(texts)
 
     if not texts:
         json.dump({"model": model_name, "dimension": 0, "rows": []}, sys.stdout)
         return
 
+    emit_progress(
+        {
+            "phase": "loading-model",
+            "message": "Loading PubMedBERT model…",
+            "processedRows": 0,
+            "totalRows": total,
+        }
+    )
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
     model.eval()
+
+    emit_progress(
+        {
+            "phase": "embedding",
+            "message": f"Starting embeddings for {total} faculty rows…",
+            "processedRows": 0,
+            "totalRows": total,
+            "elapsedSeconds": 0.0,
+        }
+    )
+
+    start_time = time.time()
 
     rows = []
     for item in texts:
@@ -720,11 +986,38 @@ def main():
 
         rows.append({"id": item.get("id"), "embedding": embedding.tolist()})
 
+        processed = len(rows)
+        elapsed = time.time() - start_time
+        remaining = None
+        if processed < total and processed > 0 and elapsed > 0:
+            remaining = (total - processed) * (elapsed / processed)
+
+        emit_progress(
+            {
+                "phase": "embedding",
+                "message": f"Embedded {processed} of {total} faculty rows",
+                "processedRows": processed,
+                "totalRows": total,
+                "elapsedSeconds": elapsed,
+                "estimatedRemainingSeconds": remaining,
+            }
+        )
+
     result = {
         "model": model_name,
         "dimension": len(rows[0]["embedding"]) if rows else 0,
         "rows": rows,
     }
+
+    emit_progress(
+        {
+            "phase": "finalizing",
+            "message": "Finalizing embedding response…",
+            "processedRows": len(rows),
+            "totalRows": total,
+            "elapsedSeconds": time.time() - start_time,
+        }
+    )
 
     json.dump(result, sys.stdout)
 
