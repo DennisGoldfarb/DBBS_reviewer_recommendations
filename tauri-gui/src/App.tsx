@@ -37,6 +37,7 @@ interface FacultyDatasetPreviewResult {
 interface FacultyDatasetStatus {
   path: string | null;
   canonicalPath: string | null;
+  sourcePath: string | null;
   lastModified: string | null;
   rowCount: number | null;
   columnCount: number | null;
@@ -1222,9 +1223,10 @@ function App() {
                 <dd className="dataset-path">
                   {isDatasetLoading
                     ? "Loading…"
-                    : datasetStatus?.canonicalPath ??
-                      datasetStatus?.path ??
-                      "Not configured"}
+                    : datasetStatus?.sourcePath ??
+                        datasetStatus?.canonicalPath ??
+                        datasetStatus?.path ??
+                        "Not configured"}
                 </dd>
               </div>
               <div>
