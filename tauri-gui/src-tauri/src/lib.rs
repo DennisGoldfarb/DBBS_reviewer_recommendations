@@ -386,7 +386,7 @@ fn emit_faculty_embedding_progress(
     app_handle: &tauri::AppHandle,
     progress: EmbeddingProgressUpdate,
 ) {
-    let _ = app_handle.emit_all(FACULTY_EMBEDDING_PROGRESS_EVENT, progress);
+    let _ = app_handle.emit(FACULTY_EMBEDDING_PROGRESS_EVENT, progress);
 }
 
 fn emit_embedding_error(app_handle: &tauri::AppHandle, total_rows: usize, message: &str) {
@@ -1520,7 +1520,7 @@ fn analyze_faculty_dataset(
 
     let column_count = headers.len();
 
-    let (mut embedding_indexes, mut identifier_indexes) = if let Some(config) = overrides {
+    let (embedding_indexes, identifier_indexes) = if let Some(config) = overrides {
         (
             normalize_column_selection(&config.embedding_columns, column_count),
             normalize_column_selection(&config.identifier_columns, column_count),
@@ -1529,7 +1529,7 @@ fn analyze_faculty_dataset(
         suggest_spreadsheet_columns(&headers, &rows)
     };
 
-    let mut program_indexes = if let Some(config) = overrides {
+    let program_indexes = if let Some(config) = overrides {
         normalize_column_selection(&config.program_columns, column_count)
     } else {
         suggest_program_columns(&headers, &rows)
