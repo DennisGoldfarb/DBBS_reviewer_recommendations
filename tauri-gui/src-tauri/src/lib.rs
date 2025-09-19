@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Instant, SystemTime};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
 const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
