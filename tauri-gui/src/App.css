@@ -4,15 +4,26 @@
   font-size: 15px;
   line-height: 1.5;
   font-weight: 400;
-  color: #0f172a;
-  background-color: #f1f5f9;
+  --washu-red: #a51417;
+  --washu-dark-red: #7f1012;
+  --washu-light-red: #d65a5f;
+  --washu-plum: #64358c;
+  --washu-navy: #1e4174;
+  --washu-cream: #f4f0e8;
+  --washu-porcelain: #f8f3eb;
+  --washu-sand: #e6d8c5;
+  --washu-border: #d6c5b2;
+  --washu-text: #2f1b16;
+  --washu-muted-text: #5c4a3f;
+  color: var(--washu-text);
+  background-color: var(--washu-cream);
 }
 
 body,
 html {
   margin: 0;
   min-height: 100%;
-  background-color: #f1f5f9;
+  background-color: var(--washu-cream);
 }
 
 #root {
@@ -29,13 +40,13 @@ html {
   margin: 0;
   font-size: 2rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--washu-red);
 }
 
 .description {
   margin-top: 0.5rem;
   margin-bottom: 0;
-  color: #475569;
+  color: var(--washu-muted-text);
   max-width: 720px;
 }
 
@@ -48,10 +59,10 @@ html {
 
 fieldset {
   border-radius: 16px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   padding: 1.5rem;
   background: #ffffff;
-  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 20px 45px rgba(47, 27, 22, 0.1);
 }
 
 legend {
@@ -63,7 +74,7 @@ legend {
 .section-description {
   margin-top: 0.25rem;
   margin-bottom: 1.25rem;
-  color: #475569;
+  color: var(--washu-muted-text);
 }
 
 .radio-group {
@@ -79,18 +90,18 @@ legend {
   border-radius: 12px;
   border: 1px solid transparent;
   padding: 0.55rem 0.95rem;
-  background: #f8fafc;
+  background: var(--washu-porcelain);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .radio-option input[type="radio"] {
-  accent-color: #2563eb;
+  accent-color: var(--washu-red);
 }
 
 .radio-option:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.15);
+  border-color: var(--washu-light-red);
+  box-shadow: 0 6px 18px rgba(165, 20, 23, 0.18);
 }
 
 .input-stack {
@@ -107,12 +118,12 @@ legend {
 
 .input-stack label {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 .input-heading {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 textarea,
@@ -121,19 +132,19 @@ input[type="number"] {
   width: 100%;
   padding: 0.6rem 0.85rem;
   border-radius: 10px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   font-size: 0.95rem;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   background: #ffffff;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 textarea:focus,
 input[type="text"]:focus,
 input[type="number"]:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+  border-color: var(--washu-red);
+  box-shadow: 0 0 0 3px rgba(165, 20, 23, 0.25);
 }
 
 textarea {
@@ -164,28 +175,28 @@ button {
   font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
-  background: #2563eb;
+  background: var(--washu-red);
   color: #ffffff;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 14px 28px rgba(165, 20, 23, 0.28);
 }
 
 button.secondary {
-  background: #0f172a;
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.25);
+  background: var(--washu-navy);
+  box-shadow: 0 14px 28px rgba(30, 65, 116, 0.28);
 }
 
 button.ghost {
   background: transparent;
-  color: #1d4ed8;
-  border: 1px solid #93c5fd;
+  color: var(--washu-red);
+  border: 1px solid var(--washu-light-red);
   box-shadow: none;
 }
 
 button.add-entry-button {
   align-self: flex-start;
-  background: #0ea5e9;
-  box-shadow: 0 14px 28px rgba(14, 165, 233, 0.2);
+  background: var(--washu-plum);
+  box-shadow: 0 14px 28px rgba(100, 53, 140, 0.22);
 }
 
 button:disabled {
@@ -197,30 +208,30 @@ button:disabled {
 
 button:not(:disabled):hover {
   transform: translateY(-1px);
-  box-shadow: 0 18px 32px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 18px 32px rgba(165, 20, 23, 0.35);
 }
 
 button.secondary:not(:disabled):hover {
-  box-shadow: 0 18px 32px rgba(15, 23, 42, 0.35);
+  box-shadow: 0 18px 32px rgba(30, 65, 116, 0.35);
 }
 
 button.add-entry-button:not(:disabled):hover {
-  box-shadow: 0 18px 32px rgba(14, 165, 233, 0.35);
+  box-shadow: 0 18px 32px rgba(100, 53, 140, 0.35);
 }
 
 .path-preview {
   font-size: 0.95rem;
-  color: #475569;
+  color: var(--washu-muted-text);
   word-break: break-all;
-  background: #f1f5f9;
-  border: 1px dashed #cbd5f5;
+  background: var(--washu-porcelain);
+  border: 1px dashed var(--washu-border);
   padding: 0.75rem;
   border-radius: 12px;
 }
 
 .preview-status {
   margin-top: 0.75rem;
-  color: #2563eb;
+  color: var(--washu-red);
   font-size: 0.9rem;
   font-weight: 500;
 }
@@ -229,15 +240,15 @@ button.add-entry-button:not(:disabled):hover {
   margin-top: 0.75rem;
   padding: 0.7rem 0.95rem;
   border-radius: 12px;
-  background: #fee2e2;
-  border: 1px solid #fca5a5;
-  color: #991b1b;
+  background: #f6d4d6;
+  border: 1px solid #e99ca1;
+  color: var(--washu-dark-red);
   font-size: 0.9rem;
 }
 
 .small-note {
   margin: 0;
-  color: #64748b;
+  color: var(--washu-muted-text);
   font-size: 0.825rem;
 }
 
@@ -248,8 +259,8 @@ button.add-entry-button:not(:disabled):hover {
   gap: 1rem;
   padding: 1rem;
   border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #cbd5f5;
+  background: var(--washu-porcelain);
+  border: 1px solid var(--washu-border);
 }
 
 .column-selector-group {
@@ -261,7 +272,7 @@ button.add-entry-button:not(:disabled):hover {
 .column-selector h4 {
   margin: 0 0 0.35rem;
   font-size: 1rem;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 .column-checkbox-list {
@@ -275,17 +286,17 @@ button.add-entry-button:not(:disabled):hover {
   align-items: center;
   gap: 0.6rem;
   border-radius: 10px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   padding: 0.55rem 0.75rem;
   background: #ffffff;
 }
 
 .column-checkbox-option input[type="checkbox"] {
-  accent-color: #2563eb;
+  accent-color: var(--washu-red);
 }
 
 .column-checkbox-option span {
-  color: #0f172a;
+  color: var(--washu-text);
   font-size: 0.9rem;
   line-height: 1.4;
 }
@@ -305,20 +316,20 @@ button.add-entry-button:not(:disabled):hover {
 .preview-table th,
 .preview-table td {
   padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid #cbd5f5;
+  border-bottom: 1px solid var(--washu-border);
   text-align: left;
   font-size: 0.85rem;
   vertical-align: top;
 }
 
 .preview-table th {
-  background: #e2e8f0;
+  background: #ede4d5;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 .preview-table td {
-  color: #334155;
+  color: var(--washu-muted-text);
   word-break: break-word;
   max-width: 320px;
 }
@@ -334,14 +345,14 @@ button.add-entry-button:not(:disabled):hover {
   margin-top: 1.1rem;
   padding: 0.75rem 0.9rem;
   border-radius: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--washu-porcelain);
+  border: 1px solid var(--washu-border);
 }
 
 .checkbox-row input[type="checkbox"] {
   width: 1.1rem;
   height: 1.1rem;
-  accent-color: #2563eb;
+  accent-color: var(--washu-red);
 }
 
 .number-row {
@@ -357,7 +368,7 @@ button.add-entry-button:not(:disabled):hover {
   flex-direction: column;
   gap: 0.5rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 .number-row input[type="number"] {
@@ -369,8 +380,8 @@ button.add-entry-button:not(:disabled):hover {
   padding: 1.4rem 1.6rem;
   border-radius: 18px;
   background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.1);
+  border: 1px solid var(--washu-border);
+  box-shadow: 0 20px 45px rgba(47, 27, 22, 0.12);
 }
 
 .dataset-card-header {
@@ -388,7 +399,7 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-card-description {
   margin-top: 0.35rem;
   margin-bottom: 1.15rem;
-  color: #475569;
+  color: var(--washu-muted-text);
 }
 
 .dataset-status-pill {
@@ -401,18 +412,18 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .dataset-status-pill.ready {
-  background: #dcfce7;
-  color: #166534;
+  background: #dde6f5;
+  color: var(--washu-navy);
 }
 
 .dataset-status-pill.warning {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: #f4d2d4;
+  color: var(--washu-dark-red);
 }
 
 .dataset-status-pill.loading {
-  background: #e0f2fe;
-  color: #0369a1;
+  background: #e5dbf4;
+  color: var(--washu-plum);
 }
 
 .dataset-meta-grid {
@@ -425,12 +436,12 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-meta-grid dt {
   margin: 0;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-text);
 }
 
 .dataset-meta-grid dd {
   margin: 0.35rem 0 0;
-  color: #334155;
+  color: var(--washu-muted-text);
   word-break: break-word;
 }
 
@@ -448,15 +459,15 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .dataset-message-info {
-  background: #e0f2fe;
-  color: #075985;
-  border: 1px solid #7dd3fc;
+  background: #dde6f5;
+  color: var(--washu-navy);
+  border: 1px solid #aec0df;
 }
 
 .dataset-message-error {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
+  background: #f6d4d6;
+  color: var(--washu-dark-red);
+  border: 1px solid #e99ca1;
 }
 
 .dataset-actions {
@@ -473,7 +484,7 @@ button.add-entry-button:not(:disabled):hover {
 .dataset-preview-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.55);
+  background: rgba(47, 27, 22, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -488,9 +499,9 @@ button.add-entry-button:not(:disabled):hover {
   overflow-y: auto;
   background: #ffffff;
   border-radius: 18px;
-  box-shadow: 0 30px 60px rgba(15, 23, 42, 0.3);
+  box-shadow: 0 30px 60px rgba(47, 27, 22, 0.32);
   padding: 1.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--washu-border);
 }
 
 .dataset-preview-header {
@@ -515,7 +526,7 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .dataset-preview-card .small-note {
-  color: #475569;
+  color: var(--washu-muted-text);
 }
 
 .dataset-config-actions {
@@ -541,25 +552,25 @@ button.add-entry-button:not(:disabled):hover {
   align-items: flex-start;
   gap: 0.6rem;
   border-radius: 12px;
-  border: 1px solid #cbd5f5;
+  border: 1px solid var(--washu-border);
   padding: 0.65rem 0.9rem;
-  background: #f8fafc;
+  background: var(--washu-porcelain);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .checkbox-option:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.15);
+  border-color: var(--washu-light-red);
+  box-shadow: 0 6px 18px rgba(165, 20, 23, 0.16);
 }
 
 .checkbox-option input[type="checkbox"] {
   margin-top: 0.15rem;
-  accent-color: #2563eb;
+  accent-color: var(--washu-red);
 }
 
 .checkbox-option span {
-  color: #0f172a;
+  color: var(--washu-text);
   font-size: 0.95rem;
   line-height: 1.4;
 }
@@ -569,25 +580,25 @@ button.add-entry-button:not(:disabled):hover {
   padding: 0.85rem 1.15rem;
   border-radius: 12px;
   font-weight: 500;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 14px 30px rgba(47, 27, 22, 0.14);
 }
 
 .status-success {
-  background: #dcfce7;
-  color: #166534;
-  border: 1px solid #86efac;
+  background: #dde6f5;
+  color: var(--washu-navy);
+  border: 1px solid #aec0df;
 }
 
 .status-error {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
+  background: #f6d4d6;
+  color: var(--washu-dark-red);
+  border: 1px solid #e99ca1;
 }
 
 .status-info {
-  background: #e0f2fe;
-  color: #075985;
-  border: 1px solid #7dd3fc;
+  background: #ede4d5;
+  color: var(--washu-text);
+  border: 1px solid var(--washu-border);
 }
 
 .result-card {
@@ -595,8 +606,8 @@ button.add-entry-button:not(:disabled):hover {
   padding: 1.5rem;
   border-radius: 18px;
   background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  border: 1px solid var(--washu-border);
+  box-shadow: 0 24px 60px rgba(47, 27, 22, 0.2);
 }
 
 .result-card h2 {
@@ -607,7 +618,7 @@ button.add-entry-button:not(:disabled):hover {
 .warning-list {
   margin: 0.75rem 0 0;
   padding-left: 1.25rem;
-  color: #b45309;
+  color: var(--washu-dark-red);
 }
 
 .detail-grid {
@@ -620,8 +631,8 @@ button.add-entry-button:not(:disabled):hover {
 .detail-card {
   padding: 0.95rem 1.05rem;
   border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--washu-porcelain);
+  border: 1px solid var(--washu-border);
 }
 
 .detail-card h3 {
@@ -636,13 +647,13 @@ button.add-entry-button:not(:disabled):hover {
 
 .detail-card dt {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--washu-text);
   margin-top: 0.5rem;
 }
 
 .detail-card dd {
   margin: 0.15rem 0 0;
-  color: #334155;
+  color: var(--washu-muted-text);
 }
 
 .path-list {
@@ -660,8 +671,8 @@ button.add-entry-button:not(:disabled):hover {
 }
 
 .prompt-preview {
-  background: #1e293b;
-  color: #f8fafc;
+  background: var(--washu-navy);
+  color: #f8f3eb;
   padding: 1rem;
   border-radius: 12px;
   white-space: pre-wrap;
@@ -681,7 +692,7 @@ button.add-entry-button:not(:disabled):hover {
 .faculty-table th,
 .faculty-table td {
   padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid #cbd5f5;
+  border-bottom: 1px solid var(--washu-border);
   text-align: left;
   font-size: 0.9rem;
 }
@@ -692,15 +703,15 @@ button.add-entry-button:not(:disabled):hover {
 
 .remove-button {
   background: transparent;
-  color: #dc2626;
-  border: 1px solid #fca5a5;
+  color: var(--washu-dark-red);
+  border: 1px solid #e99ca1;
   padding: 0.55rem 0.9rem;
   border-radius: 10px;
   font-weight: 600;
 }
 
 .remove-button:hover {
-  background: #fee2e2;
+  background: #f6d4d6;
   box-shadow: none;
   transform: none;
 }
@@ -734,194 +745,194 @@ button.add-entry-button:not(:disabled):hover {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    background-color: #0f172a;
-    color: #e2e8f0;
+    background-color: #1b0f0d;
+    color: #f8f3eb;
   }
 
   body,
   html {
-    background-color: #0f172a;
+    background-color: #1b0f0d;
   }
 
   fieldset {
-    background: #1e293b;
-    border-color: #334155;
-    box-shadow: 0 20px 45px rgba(15, 23, 42, 0.4);
+    background: #231211;
+    border-color: #3a1d1b;
+    box-shadow: 0 20px 45px rgba(10, 4, 3, 0.55);
   }
 
   .section-description,
   .description {
-    color: #cbd5f5;
+    color: #d9cbb9;
   }
 
   .page-header h1 {
-    color: #f8fafc;
+    color: #f8f3eb;
   }
 
   .input-heading,
   .number-row label {
-    color: #e2e8f0;
+    color: #f8f3eb;
   }
 
   .input-stack label {
-    color: #e2e8f0;
+    color: #f8f3eb;
   }
 
   textarea,
   input[type="text"],
   input[type="number"] {
-    background: #0f172a;
-    color: #e2e8f0;
-    border-color: #334155;
+    background: #1b0f0d;
+    color: #f8f3eb;
+    border-color: #4d2824;
   }
 
   .radio-option {
-    background: #111827;
-    border-color: #1f2937;
+    background: #261312;
+    border-color: #3a1d1b;
   }
 
   .checkbox-option {
-    background: #111827;
-    border-color: #1f2937;
+    background: #261312;
+    border-color: #3a1d1b;
   }
 
   .checkbox-option:hover {
-    border-color: #2563eb;
+    border-color: var(--washu-light-red);
   }
 
   .checkbox-option span {
-    color: #e2e8f0;
+    color: #f8f3eb;
   }
 
   .path-preview {
-    background: #111827;
-    border-color: #1f2937;
-    color: #cbd5f5;
+    background: #261312;
+    border-color: #3a1d1b;
+    color: #f3e4d6;
   }
 
   .preview-status {
-    color: #93c5fd;
+    color: #f1a5aa;
   }
 
   .preview-error {
-    background: #7f1d1d;
-    border-color: #dc2626;
-    color: #fee2e2;
+    background: #5b1e21;
+    border-color: #a84247;
+    color: #fde4e5;
   }
 
   .checkbox-row {
-    background: #111827;
-    border-color: #1f2937;
+    background: #261312;
+    border-color: #3a1d1b;
   }
 
   .detail-card {
-    background: #111827;
-    border-color: #1f2937;
+    background: #261312;
+    border-color: #3a1d1b;
   }
 
   .spreadsheet-preview-card {
-    background: #111827;
-    border-color: #1f2937;
+    background: #261312;
+    border-color: #3a1d1b;
   }
 
   .column-checkbox-option {
-    background: #0f172a;
-    border-color: #1f2937;
+    background: #1b0f0d;
+    border-color: #3a1d1b;
   }
 
   .column-checkbox-option span {
-    color: #e2e8f0;
+    color: #f8f3eb;
   }
 
   .preview-table {
-    background: #0f172a;
+    background: #1b0f0d;
   }
 
   .preview-table th {
-    background: #1f2937;
-    color: #f8fafc;
+    background: #2f1615;
+    color: #f8f3eb;
   }
 
   .preview-table td {
-    color: #cbd5f5;
+    color: #e8d8ca;
   }
 
   .result-card {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.65);
+    background: #1b0f0d;
+    border-color: #3a1d1b;
+    box-shadow: 0 24px 60px rgba(10, 4, 3, 0.7);
   }
 
   .prompt-preview {
-    background: #0b1120;
+    background: #2f1615;
   }
 
   button.secondary {
-    background: #1d4ed8;
+    background: #31548c;
   }
 
   button.ghost {
-    color: #93c5fd;
-    border-color: #1d4ed8;
+    color: #f1a5aa;
+    border-color: #a84247;
   }
 
   .dataset-card {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.65);
+    background: #1b0f0d;
+    border-color: #3a1d1b;
+    box-shadow: 0 24px 60px rgba(10, 4, 3, 0.7);
   }
 
   .dataset-card-description {
-    color: #cbd5f5;
+    color: #d9cbb9;
   }
 
   .dataset-meta-grid dt {
-    color: #e2e8f0;
+    color: #f8f3eb;
   }
 
   .dataset-meta-grid dd {
-    color: #cbd5f5;
+    color: #d9cbb9;
   }
 
   .dataset-status-pill.ready {
-    background: rgba(22, 101, 52, 0.25);
-    color: #bbf7d0;
+    background: rgba(30, 65, 116, 0.35);
+    color: #d6e3f7;
   }
 
   .dataset-status-pill.warning {
-    background: rgba(185, 28, 28, 0.2);
-    color: #fecaca;
+    background: rgba(125, 34, 36, 0.35);
+    color: #f8dada;
   }
 
   .dataset-status-pill.loading {
-    background: rgba(3, 105, 161, 0.2);
-    color: #bae6fd;
+    background: rgba(100, 53, 140, 0.3);
+    color: #e5d8f3;
   }
 
   .dataset-message-info {
-    background: rgba(14, 165, 233, 0.18);
-    border-color: rgba(56, 189, 248, 0.35);
-    color: #bae6fd;
+    background: rgba(30, 65, 116, 0.3);
+    border-color: rgba(174, 192, 223, 0.45);
+    color: #d6e3f7;
   }
 
   .dataset-message-error {
-    background: rgba(220, 38, 38, 0.22);
-    border-color: rgba(248, 113, 113, 0.35);
-    color: #fecaca;
+    background: rgba(125, 34, 36, 0.35);
+    border-color: rgba(233, 156, 161, 0.45);
+    color: #f8dada;
   }
 
   .dataset-preview-dialog {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 30px 70px rgba(2, 6, 23, 0.7);
+    background: #1b0f0d;
+    border-color: #3a1d1b;
+    box-shadow: 0 30px 70px rgba(10, 4, 3, 0.75);
   }
 
   .dataset-preview-card {
-    background: #111827;
-    border-color: #1f2937;
+    background: #261312;
+    border-color: #3a1d1b;
   }
 
   .dataset-preview-card .small-note {
-    color: #cbd5f5;
+    color: #d9cbb9;
   }
 }
