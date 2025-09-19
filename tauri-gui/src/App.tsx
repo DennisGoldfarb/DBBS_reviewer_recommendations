@@ -1,7 +1,11 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import {
+  openFileDialog,
+  safeInvoke,
+  safeListen,
+  type FileDialogOptions,
+} from "./tauriBridge";
 import "./App.css";
 
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
@@ -359,7 +363,7 @@ function App() {
   useEffect(() => {
     const loadStatus = async () => {
       try {
-        const status = await invoke<FacultyDatasetStatus>(
+        const status = await safeInvoke<FacultyDatasetStatus>(
           "get_faculty_dataset_status",
         );
         applyDatasetStatus(status);
@@ -385,7 +389,7 @@ function App() {
     let isMounted = true;
     let unlisten: UnlistenFn | null = null;
 
-    listen<EmbeddingProgressPayload>("faculty-embedding-progress", (event) => {
+    safeListen<EmbeddingProgressPayload>("faculty-embedding-progress", (event) => {
       setEmbeddingProgress(event.payload);
     })
       .then((fn) => {
@@ -413,7 +417,7 @@ function App() {
 
     const registerListeners = async () => {
       try {
-        const unlistenProgress = await listen<PromptMatchingProgressPayload>(
+        const unlistenProgress = await safeListen<PromptMatchingProgressPayload>(
           "prompt-matching-progress",
           (event) => {
             if (!isMounted) {
@@ -437,7 +441,7 @@ function App() {
       }
 
       try {
-        const unlistenComplete = await listen<PromptMatchingCompletePayload>(
+        const unlistenComplete = await safeListen<PromptMatchingCompletePayload>(
           "prompt-matching-complete",
           (event) => {
             if (!isMounted) {
@@ -487,7 +491,7 @@ function App() {
       }
 
       try {
-        const unlistenFailed = await listen<PromptMatchingFailedPayload>(
+        const unlistenFailed = await safeListen<PromptMatchingFailedPayload>(
           "prompt-matching-failed",
           (event) => {
             if (!isMounted) {
@@ -584,7 +588,7 @@ function App() {
       setEmbeddingStatus(null);
 
       try {
-        const message = await invoke<string>("update_faculty_embeddings");
+        const message = await safeInvoke<string>("update_faculty_embeddings");
         setEmbeddingStatus({ variant: "success", message });
       } catch (updateError) {
         const message =
@@ -602,7 +606,7 @@ function App() {
 
   const selectDatasetFile = async () => {
     try {
-      const selection = await open({
+      const selection = await openFileDialog({
         multiple: false,
         filters: [
           {
@@ -635,7 +639,7 @@ function App() {
     setIsDatasetConfigurationOpen(true);
     setIsLoadingDatasetConfiguration(true);
     try {
-      const preview = await invoke<FacultyDatasetPreviewResult>(
+      const preview = await safeInvoke<FacultyDatasetPreviewResult>(
         "preview_faculty_dataset_replacement",
         { path },
       );
@@ -705,7 +709,7 @@ function App() {
     setIsDatasetBusy(true);
 
     try {
-      const status = await invoke<FacultyDatasetStatus>(
+      const status = await safeInvoke<FacultyDatasetStatus>(
         "replace_faculty_dataset",
         {
           path: datasetConfigurationPath,
@@ -749,7 +753,7 @@ function App() {
     setDatasetBanner(null);
     setIsDatasetBusy(true);
     try {
-      const status = await invoke<FacultyDatasetStatus>(
+      const status = await safeInvoke<FacultyDatasetStatus>(
         "restore_default_faculty_dataset",
       );
       applyDatasetStatus(status, "success");
@@ -842,10 +846,10 @@ function App() {
 
   const handleFileSelection = async (
     setter: (value: string) => void,
-    options: Parameters<typeof open>[0],
+    options: FileDialogOptions,
   ) => {
     try {
-      const selection = await open(options);
+      const selection = await openFileDialog(options);
       if (typeof selection === "string") {
         setter(selection);
         return selection;
@@ -881,7 +885,7 @@ function App() {
     setResult(null);
 
     try {
-      const preview = await invoke<SpreadsheetPreview>("analyze_spreadsheet", {
+      const preview = await safeInvoke<SpreadsheetPreview>("analyze_spreadsheet", {
         path: trimmed,
       });
 
@@ -1072,7 +1076,7 @@ function App() {
     }
 
     try {
-      const response = await invoke<SubmissionResponse>(
+      const response = await safeInvoke<SubmissionResponse>(
         "submit_matching_request",
         {
           payload: {
