@@ -604,8 +604,7 @@ fn dataset_destination(app_handle: &tauri::AppHandle) -> Result<PathBuf, String>
     let base = app_handle
         .path()
         .app_data_dir()
-        .map_err(|err| format!("Unable to resolve the application data directory: {err}"))?
-        .ok_or_else(|| "The application data directory is not available.".to_string())?;
+        .map_err(|err| format!("Unable to resolve the application data directory: {err}"))?;
     Ok(base.join(FACULTY_DATASET_FILENAME))
 }
 
