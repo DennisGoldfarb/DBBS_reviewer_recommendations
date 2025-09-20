@@ -37,6 +37,15 @@ interface DirectoryMatchResults {
   spreadsheet: GeneratedSpreadsheet;
 }
 
+interface SpreadsheetMatchResults {
+  processedRows: number;
+  matchedRows: number;
+  skippedRows: number;
+  totalRows: number;
+  preview: SpreadsheetPreview;
+  spreadsheet: GeneratedSpreadsheet;
+}
+
 interface FacultyDatasetAnalysis {
   embeddingColumns: string[];
   identifierColumns: string[];
@@ -96,6 +105,7 @@ interface SubmissionResponse {
   details: SubmissionDetails;
   promptMatches: PromptMatchResult[];
   directoryResults?: DirectoryMatchResults;
+  spreadsheetResults?: SpreadsheetMatchResults;
 }
 
 interface StatusMessage {
@@ -952,66 +962,85 @@ function App() {
   }
 };
 
-  const handleDownloadDirectoryResults = useCallback(async () => {
-    if (!result?.directoryResults) {
-      return;
-    }
-
-    const { spreadsheet } = result.directoryResults;
-    if (!spreadsheet?.content) {
-      setError("The directory results are not available for download.");
-      return;
-    }
-
-    try {
-      const defaultName = (() => {
-        if (spreadsheet.filename && spreadsheet.filename.trim().length > 0) {
-          return spreadsheet.filename.trim();
-        }
-
-        const timestamp = new Date()
-          .toISOString()
-          .replace(/[-:]/g, "")
-          .replace("T", "-")
-          .replace(/\..+/, "");
-        return `DBBS_matches_${timestamp}.tsv`;
-      })();
-      const extension = defaultName.includes(".")
-        ? defaultName.split(".").pop()?.toLowerCase() ?? "tsv"
-        : "tsv";
-
-      const saveOptions =
-        extension && extension.length > 0
-          ? {
-              defaultPath: defaultName,
-              filters: [
-                {
-                  name: `${extension.toUpperCase()} files`,
-                  extensions: [extension],
-                },
-              ],
-            }
-          : { defaultPath: defaultName };
-
-      const selectedPath = await save(saveOptions);
-      if (!selectedPath) {
+  const downloadGeneratedSpreadsheet = useCallback(
+    async (
+      spreadsheet: GeneratedSpreadsheet | null | undefined,
+      context: "directory" | "spreadsheet",
+    ) => {
+      if (!spreadsheet?.content) {
+        setError(
+          context === "directory"
+            ? "The directory results are not available for download."
+            : "The spreadsheet results are not available for download.",
+        );
         return;
       }
 
-      await invoke("save_generated_spreadsheet", {
-        path: selectedPath,
-        content: spreadsheet.content,
-      });
+      try {
+        const defaultName = (() => {
+          if (spreadsheet.filename && spreadsheet.filename.trim().length > 0) {
+            return spreadsheet.filename.trim();
+          }
 
-      setError(null);
-    } catch (downloadError) {
-      const message =
-        downloadError instanceof Error
-          ? downloadError.message
-          : String(downloadError);
-      setError(`Unable to save the directory results: ${message}`);
-    }
-  }, [result, setError]);
+          const timestamp = new Date()
+            .toISOString()
+            .replace(/[-:]/g, "")
+            .replace("T", "-")
+            .replace(/\..+/, "");
+          return `DBBS_matches_${timestamp}.tsv`;
+        })();
+        const extension = defaultName.includes(".")
+          ? defaultName.split(".").pop()?.toLowerCase() ?? "tsv"
+          : "tsv";
+
+        const saveOptions =
+          extension && extension.length > 0
+            ? {
+                defaultPath: defaultName,
+                filters: [
+                  {
+                    name: `${extension.toUpperCase()} files`,
+                    extensions: [extension],
+                  },
+                ],
+              }
+            : { defaultPath: defaultName };
+
+        const selectedPath = await save(saveOptions);
+        if (!selectedPath) {
+          return;
+        }
+
+        await invoke("save_generated_spreadsheet", {
+          path: selectedPath,
+          content: spreadsheet.content,
+        });
+
+        setError(null);
+      } catch (downloadError) {
+        const message =
+          downloadError instanceof Error
+            ? downloadError.message
+            : String(downloadError);
+        setError(`Unable to save the ${context} results: ${message}`);
+      }
+    },
+    [setError],
+  );
+
+  const handleDownloadDirectoryResults = useCallback(async () => {
+    await downloadGeneratedSpreadsheet(
+      result?.directoryResults?.spreadsheet ?? null,
+      "directory",
+    );
+  }, [downloadGeneratedSpreadsheet, result]);
+
+  const handleDownloadSpreadsheetResults = useCallback(async () => {
+    await downloadGeneratedSpreadsheet(
+      result?.spreadsheetResults?.spreadsheet ?? null,
+      "spreadsheet",
+    );
+  }, [downloadGeneratedSpreadsheet, result]);
 
   const handleEmbeddingsUpdate = async () => {
     await runEmbeddingRefresh(datasetStatus);
@@ -1039,6 +1068,28 @@ function App() {
             `${skippedDocuments} document${
               skippedDocuments === 1 ? " was" : "s were"
             } skipped due to missing content or errors`,
+          );
+        }
+        return `${sentences.join(". ")}.`;
+      })()
+    : null;
+
+  const spreadsheetSummaryText = result?.spreadsheetResults
+    ? (() => {
+        const { processedRows, matchedRows, skippedRows } =
+          result.spreadsheetResults;
+        const sentences: string[] = [];
+        sentences.push(
+          `Processed ${processedRows} row${processedRows === 1 ? "" : "s"}`,
+        );
+        sentences.push(
+          matchedRows === 0
+            ? "No matches were produced"
+            : `${matchedRows} row${matchedRows === 1 ? "" : "s"} produced matches`,
+        );
+        if (skippedRows > 0) {
+          sentences.push(
+            `${skippedRows} row${skippedRows === 1 ? " was" : "s were"} skipped due to missing content or errors`,
           );
         }
         return `${sentences.join(". ")}.`;
@@ -1842,7 +1893,75 @@ function App() {
               </section>
             )}
 
-            {result.promptMatches.length > 0 && !result.directoryResults && (
+            {result.spreadsheetResults && (
+              <section className="directory-results">
+                <h3>Spreadsheet match preview</h3>
+                {spreadsheetSummaryText && (
+                  <p className="section-description">{spreadsheetSummaryText}</p>
+                )}
+                {result.spreadsheetResults.preview.rows.length > 0 ? (
+                  <>
+                    <div className="spreadsheet-preview-card">
+                      <div className="spreadsheet-preview">
+                        <table>
+                          <thead>
+                            <tr>
+                              {result.spreadsheetResults.preview.headers.map(
+                                (header, headerIndex) => (
+                                  <th key={`spreadsheet-header-${headerIndex}`}>
+                                    {header}
+                                  </th>
+                                ),
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.spreadsheetResults.preview.rows.map(
+                              (row, rowIndex) => (
+                                <tr key={`spreadsheet-row-${rowIndex}`}>
+                                  {row.map((cell, cellIndex) => (
+                                    <td
+                                      key={`spreadsheet-cell-${rowIndex}-${cellIndex}`}
+                                    >
+                                      {cell}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <p className="small-note">
+                      Showing {result.spreadsheetResults.preview.rows.length}
+                      {result.spreadsheetResults.totalRows >
+                      result.spreadsheetResults.preview.rows.length
+                        ? ` of ${result.spreadsheetResults.totalRows}`
+                        : ""}{" "}
+                      row{result.spreadsheetResults.totalRows === 1 ? "" : "s"}.
+                    </p>
+                  </>
+                ) : (
+                  <p className="small-note">
+                    No match rows were generated for the available prompts.
+                  </p>
+                )}
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handleDownloadSpreadsheetResults}
+                  >
+                    Download match spreadsheet
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {result.promptMatches.length > 0 &&
+              !result.directoryResults &&
+              !result.spreadsheetResults && (
               <section className="match-results">
                 {result.promptMatches.map((match, matchIndex) => (
                   <article className="match-card" key={`match-${matchIndex}`}>
