@@ -383,6 +383,12 @@ fn perform_matching_request(
 struct EmbeddingRequestPayload {
     model: String,
     texts: Vec<EmbeddingRequestRow>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_label: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_label_plural: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -487,6 +493,8 @@ fn embed_prompt(
             id: 0,
             text: prompt.to_string(),
         }],
+        item_label: Some("text query".into()),
+        item_label_plural: Some("text queries".into()),
     };
 
     let response = run_embedding_helper(app_handle, &payload)?;
@@ -1063,6 +1071,8 @@ fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<Str
                 text: context.text.clone(),
             })
             .collect(),
+        item_label: Some("faculty row".into()),
+        item_label_plural: Some("faculty rows".into()),
     };
 
     emit_faculty_embedding_progress(
@@ -1454,6 +1464,29 @@ def main():
     texts = payload.get("texts") or []
     total = len(texts)
 
+    raw_label = payload.get("itemLabel")
+    raw_plural = payload.get("itemLabelPlural")
+
+    if isinstance(raw_label, str):
+        raw_label = raw_label.strip()
+    else:
+        raw_label = ""
+
+    if isinstance(raw_plural, str):
+        raw_plural = raw_plural.strip()
+    else:
+        raw_plural = ""
+
+    singular_label = raw_label or "text entry"
+    if raw_plural:
+        plural_label = raw_plural
+    elif singular_label.endswith("s"):
+        plural_label = singular_label
+    else:
+        plural_label = singular_label + "s"
+
+    label_for_total = singular_label if total == 1 else plural_label
+
     if not texts:
         json.dump({"model": model_name, "dimension": 0, "rows": []}, sys.stdout)
         return
@@ -1474,7 +1507,7 @@ def main():
     emit_progress(
         {
             "phase": "embedding",
-            "message": f"Starting embeddings for {total} faculty rows…",
+            "message": f"Starting embeddings for {total} {label_for_total}…",
             "processedRows": 0,
             "totalRows": total,
             "elapsedSeconds": 0.0,
@@ -1519,7 +1552,7 @@ def main():
         emit_progress(
             {
                 "phase": "embedding",
-                "message": f"Embedded {processed} of {total} faculty rows",
+                "message": f"Embedded {processed} of {total} {label_for_total}",
                 "processedRows": processed,
                 "totalRows": total,
                 "elapsedSeconds": elapsed,
