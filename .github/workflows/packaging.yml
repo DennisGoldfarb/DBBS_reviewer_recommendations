@@ -8,6 +8,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to build and release'
+        required: true
 
 jobs:
   build:
@@ -42,25 +47,31 @@ jobs:
           projectPath: tauri-gui
 
   create-release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     outputs:
       release-id: ${{ steps.create-release.outputs.id }}
+      release-tag: ${{ steps.release-tag.outputs.value }}
     steps:
+      - name: Determine release tag
+        id: release-tag
+        run: echo "value=${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}" >> $GITHUB_OUTPUT
+
       - name: Create GitHub release
         id: create-release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          release_name: DDBS Reviewer Recommendations v${{ github.ref_name }}
+          tag_name: ${{ steps.release-tag.outputs.value }}
+          release_name: DDBS Reviewer Recommendations v${{ steps.release-tag.outputs.value }}
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: false
 
   release:
     needs: create-release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: needs.create-release.result == 'success'
     strategy:
       matrix:
         platform: [windows-latest, macos-latest]
