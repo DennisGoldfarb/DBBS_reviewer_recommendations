@@ -113,6 +113,8 @@ struct SubmissionResponse {
     prompt_matches: Vec<PromptMatchResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     directory_results: Option<DirectoryMatchResults>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spreadsheet_results: Option<SpreadsheetMatchResults>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -223,8 +225,10 @@ fn perform_matching_request(
     let mut prompt_preview = None;
     let mut selected_prompt_columns = Vec::new();
     let mut selected_identifier_columns = Vec::new();
+    let mut detail_identifier_columns = Vec::new();
     let mut prepared_prompt_text: Option<String> = None;
     let mut directory_source: Option<PathBuf> = None;
+    let mut spreadsheet_source: Option<PathBuf> = None;
 
     match task_type {
         TaskType::Prompt => {
@@ -261,13 +265,15 @@ fn perform_matching_request(
                 warnings.push(message);
             }
             validated_paths.push(PathConfirmation::new("Spreadsheet", &spreadsheet));
+            spreadsheet_source = Some(spreadsheet.clone());
 
             selected_prompt_columns = normalize_columns(spreadsheet_prompt_columns);
             selected_identifier_columns = normalize_columns(spreadsheet_identifier_columns);
-
-            if selected_identifier_columns.is_empty() {
-                return Err("Select at least one column to identify each student.".into());
-            }
+            detail_identifier_columns = if selected_identifier_columns.is_empty() {
+                vec!["Row number".into()]
+            } else {
+                selected_identifier_columns.clone()
+            };
 
             if selected_prompt_columns.is_empty() {
                 return Err("Select at least one column containing student prompts.".into());
@@ -335,7 +341,7 @@ fn perform_matching_request(
         recommendations_per_faculty: student_recs_per_faculty,
         prompt_preview,
         spreadsheet_prompt_columns: selected_prompt_columns.clone(),
-        spreadsheet_identifier_columns: selected_identifier_columns.clone(),
+        spreadsheet_identifier_columns: detail_identifier_columns.clone(),
     };
 
     let summary = build_summary(
@@ -349,9 +355,10 @@ fn perform_matching_request(
 
     let mut prompt_matches = Vec::new();
     let mut directory_results = None;
+    let mut spreadsheet_results = None;
 
-    let needs_prompt_embedding =
-        prepared_prompt_text.is_some() || matches!(task_type, TaskType::Directory);
+    let needs_prompt_embedding = prepared_prompt_text.is_some()
+        || matches!(task_type, TaskType::Directory | TaskType::Spreadsheet);
     let mut faculty_embedding_index: Option<FacultyEmbeddingIndex> = None;
 
     if needs_prompt_embedding {
@@ -408,12 +415,37 @@ fn perform_matching_request(
         directory_results = Some(outcome.results);
     }
 
+    if matches!(task_type, TaskType::Spreadsheet) {
+        let spreadsheet_path = spreadsheet_source.as_ref().ok_or_else(|| {
+            "The spreadsheet path was not preserved during processing.".to_string()
+        })?;
+        let embedding_index = faculty_embedding_index
+            .as_ref()
+            .ok_or_else(|| "The faculty embedding index was not loaded.".to_string())?;
+        let limit = faculty_recs_per_student.max(1) as usize;
+
+        let outcome = process_prompt_spreadsheet(
+            &app_handle,
+            spreadsheet_path,
+            embedding_index,
+            &selected_prompt_columns,
+            &selected_identifier_columns,
+            limit,
+            allowed_faculty_rows.as_ref(),
+        )?;
+
+        warnings.extend(outcome.warnings);
+        prompt_matches.extend(outcome.prompt_matches);
+        spreadsheet_results = Some(outcome.results);
+    }
+
     Ok(SubmissionResponse {
         summary,
         warnings,
         details,
         prompt_matches,
         directory_results,
+        spreadsheet_results,
     })
 }
 
@@ -519,11 +551,29 @@ struct DirectoryMatchResults {
     spreadsheet: GeneratedSpreadsheet,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SpreadsheetMatchResults {
+    processed_rows: usize,
+    matched_rows: usize,
+    skipped_rows: usize,
+    total_rows: usize,
+    preview: SpreadsheetPreview,
+    spreadsheet: GeneratedSpreadsheet,
+}
+
 #[derive(Debug)]
 struct DirectoryProcessingOutcome {
     warnings: Vec<String>,
     prompt_matches: Vec<PromptMatchResult>,
     results: DirectoryMatchResults,
+}
+
+#[derive(Debug)]
+struct SpreadsheetProcessingOutcome {
+    warnings: Vec<String>,
+    prompt_matches: Vec<PromptMatchResult>,
+    results: SpreadsheetMatchResults,
 }
 
 fn load_faculty_embedding_index(
@@ -920,6 +970,295 @@ fn process_directory_documents(
     };
 
     Ok(DirectoryProcessingOutcome {
+        warnings,
+        prompt_matches,
+        results,
+    })
+}
+
+fn process_prompt_spreadsheet(
+    app_handle: &tauri::AppHandle,
+    spreadsheet_path: &Path,
+    index: &FacultyEmbeddingIndex,
+    prompt_columns: &[String],
+    identifier_columns: &[String],
+    limit: usize,
+    allowed_rows: Option<&HashSet<usize>>,
+) -> Result<SpreadsheetProcessingOutcome, String> {
+    #[derive(Debug)]
+    struct SpreadsheetRowContext {
+        result_index: usize,
+        prompt: String,
+    }
+
+    #[derive(Debug)]
+    struct SpreadsheetRowResult {
+        warning_label: String,
+        identifier_values: Vec<String>,
+        identifier_label: String,
+        prompt_preview: String,
+        matches: Vec<FacultyMatchResult>,
+        status_message: Option<String>,
+    }
+
+    let (headers, rows) = read_full_spreadsheet(spreadsheet_path)?;
+    let header_map = build_header_index_map(&headers);
+    let prompt_indexes = indexes_from_spreadsheet_labels(&header_map, prompt_columns)?;
+    let identifier_indexes = indexes_from_spreadsheet_labels(&header_map, identifier_columns)?;
+    let include_row_number_column = identifier_indexes.is_empty();
+
+    let mut warnings = Vec::new();
+    let mut contexts: Vec<SpreadsheetRowContext> = Vec::new();
+    let mut row_results: Vec<SpreadsheetRowResult> = Vec::new();
+
+    if rows.is_empty() {
+        warnings.push("The spreadsheet did not include any data rows to process.".into());
+    }
+
+    for (row_index, row) in rows.iter().enumerate() {
+        let row_number = row_index + 2;
+        let mut identifier_values = Vec::new();
+        let mut label_segments = Vec::new();
+
+        if include_row_number_column {
+            identifier_values.push(row_number.to_string());
+            label_segments.push(format!("Row {}", row_number));
+        }
+
+        for &index in &identifier_indexes {
+            let value = row.get(index).cloned().unwrap_or_default();
+            if !value.trim().is_empty() {
+                label_segments.push(value.trim().to_string());
+            }
+            identifier_values.push(value);
+        }
+
+        let identifier_label = if label_segments.is_empty() {
+            format!("Row {}", row_number)
+        } else {
+            label_segments.join(" – ")
+        };
+
+        let warning_label = if label_segments.is_empty()
+            || (include_row_number_column && label_segments.len() == 1)
+        {
+            format!("row {}", row_number)
+        } else {
+            format!("row {} ({})", row_number, identifier_label.as_str())
+        };
+
+        let mut prompt_parts = Vec::new();
+        for &index in &prompt_indexes {
+            if let Some(value) = row.get(index) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    prompt_parts.push(trimmed.to_string());
+                }
+            }
+        }
+
+        let mut result = SpreadsheetRowResult {
+            warning_label,
+            identifier_values,
+            identifier_label,
+            prompt_preview: String::new(),
+            matches: Vec::new(),
+            status_message: None,
+        };
+
+        if prompt_parts.is_empty() {
+            warnings.push(format!(
+                "Skipped {} because the selected prompt columns were empty.",
+                result.warning_label
+            ));
+            result.status_message =
+                Some("No prompt content was provided in the selected columns.".into());
+        } else {
+            let prompt_text = prompt_parts.join("\n\n");
+            result.prompt_preview = build_prompt_preview(&prompt_text);
+            let result_index = row_results.len();
+            contexts.push(SpreadsheetRowContext {
+                result_index,
+                prompt: prompt_text,
+            });
+        }
+
+        row_results.push(result);
+    }
+
+    let mut prompt_matches = Vec::new();
+    let mut missing_embeddings = 0usize;
+
+    if !contexts.is_empty() {
+        let model_name = if index.model.trim().is_empty() {
+            DEFAULT_EMBEDDING_MODEL.to_string()
+        } else {
+            index.model.clone()
+        };
+
+        let payload = EmbeddingRequestPayload {
+            model: model_name,
+            texts: contexts
+                .iter()
+                .enumerate()
+                .map(|(id, context)| EmbeddingRequestRow {
+                    id,
+                    text: context.prompt.clone(),
+                })
+                .collect(),
+            item_label: Some("spreadsheet row".into()),
+            item_label_plural: Some("spreadsheet rows".into()),
+        };
+
+        let response = run_embedding_helper(app_handle, &payload)?;
+        if response.dimension != index.dimension {
+            return Err(format!(
+                "The spreadsheet embedding dimension ({}) does not match the faculty embedding dimension ({}).",
+                response.dimension, index.dimension
+            ));
+        }
+
+        let mut embedding_map: HashMap<usize, Vec<f32>> = HashMap::new();
+        for row in response.rows {
+            embedding_map.insert(row.id, row.embedding);
+        }
+
+        for (context_index, context) in contexts.iter().enumerate() {
+            let result = &mut row_results[context.result_index];
+            let prompt_label = if result.prompt_preview.is_empty() {
+                result.identifier_label.clone()
+            } else {
+                format!("{} — {}", result.identifier_label, result.prompt_preview)
+            };
+
+            match embedding_map.remove(&context_index) {
+                Some(embedding) => {
+                    let matches = find_best_faculty_matches(index, &embedding, limit, allowed_rows);
+                    let matches_for_prompt = matches.clone();
+
+                    if matches_for_prompt.is_empty() {
+                        result.status_message = Some("No faculty matches were returned.".into());
+                    } else {
+                        result.status_message = None;
+                    }
+
+                    result.matches = matches;
+                    prompt_matches.push(PromptMatchResult {
+                        prompt: prompt_label,
+                        faculty_matches: matches_for_prompt,
+                    });
+                }
+                None => {
+                    missing_embeddings += 1;
+                    let message =
+                        "The embedding helper did not return a result for this row.".to_string();
+                    warnings.push(format!(
+                        "The embedding helper did not return an embedding for {}.",
+                        result.warning_label
+                    ));
+                    result.status_message = Some(message.clone());
+                    prompt_matches.push(PromptMatchResult {
+                        prompt: prompt_label,
+                        faculty_matches: Vec::new(),
+                    });
+                }
+            }
+        }
+    } else if !row_results.is_empty() {
+        warnings.push("None of the rows in the spreadsheet contained prompt text to embed.".into());
+    }
+
+    let processed_rows = if contexts.is_empty() {
+        0
+    } else {
+        contexts.len().saturating_sub(missing_embeddings)
+    };
+    let skipped_rows = row_results.len().saturating_sub(processed_rows);
+    let matched_rows = row_results
+        .iter()
+        .filter(|result| !result.matches.is_empty())
+        .count();
+
+    let mut headers: Vec<String> = if include_row_number_column {
+        vec!["Row Number".into()]
+    } else {
+        identifier_columns
+            .iter()
+            .map(|label| label.trim().to_string())
+            .collect()
+    };
+    headers.push("Rank".into());
+    headers.push("Similarity".into());
+    headers.extend(index.identifier_columns.clone());
+
+    let mut output_rows = Vec::new();
+    for result in &row_results {
+        if result.matches.is_empty() {
+            let message = result
+                .status_message
+                .clone()
+                .unwrap_or_else(|| "No faculty matches were returned.".into());
+            let mut row = result.identifier_values.clone();
+            row.push(String::new());
+            row.push(message);
+            for _ in &index.identifier_columns {
+                row.push(String::new());
+            }
+            output_rows.push(row);
+            continue;
+        }
+
+        for (rank, faculty) in result.matches.iter().enumerate() {
+            let mut row = result.identifier_values.clone();
+            row.push((rank + 1).to_string());
+            row.push(format_similarity_percent(faculty.similarity));
+            for label in &index.identifier_columns {
+                row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());
+            }
+            output_rows.push(row);
+        }
+    }
+
+    let preview_rows: Vec<Vec<String>> = output_rows.iter().take(20).cloned().collect();
+    let preview = SpreadsheetPreview {
+        headers: headers.clone(),
+        rows: preview_rows,
+        suggested_prompt_columns: Vec::new(),
+        suggested_identifier_columns: Vec::new(),
+    };
+
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(b'\t')
+        .from_writer(Vec::new());
+    writer
+        .write_record(headers.iter())
+        .map_err(|err| format!("Unable to write the spreadsheet match header row: {err}"))?;
+    for row in &output_rows {
+        writer
+            .write_record(row.iter())
+            .map_err(|err| format!("Unable to write a spreadsheet match row: {err}"))?;
+    }
+    let tsv_bytes = writer
+        .into_inner()
+        .map_err(|err| format!("Unable to finalize the spreadsheet match spreadsheet: {err}"))?;
+    let tsv_content = String::from_utf8(tsv_bytes).map_err(|err| {
+        format!("The spreadsheet match spreadsheet contained invalid UTF-8: {err}")
+    })?;
+
+    let results = SpreadsheetMatchResults {
+        processed_rows,
+        matched_rows,
+        skipped_rows,
+        total_rows: output_rows.len(),
+        preview,
+        spreadsheet: GeneratedSpreadsheet {
+            filename: default_directory_spreadsheet_name(),
+            mime_type: "text/tab-separated-values".into(),
+            content: tsv_content,
+        },
+    };
+
+    Ok(SpreadsheetProcessingOutcome {
         warnings,
         prompt_matches,
         results,
@@ -1620,6 +1959,28 @@ fn indexes_from_labels(
         } else {
             return Err(format!(
                 "The column '{label}' is not available in the faculty dataset. Re-run the dataset analysis before refreshing embeddings."
+            ));
+        }
+    }
+
+    indexes.sort_unstable();
+    indexes.dedup();
+    Ok(indexes)
+}
+
+fn indexes_from_spreadsheet_labels(
+    header_map: &HashMap<String, usize>,
+    labels: &[String],
+) -> Result<Vec<usize>, String> {
+    let mut indexes = Vec::new();
+
+    for label in labels {
+        let key = label.trim().to_lowercase();
+        if let Some(&index) = header_map.get(&key) {
+            indexes.push(index);
+        } else {
+            return Err(format!(
+                "The column '{label}' is not available in the spreadsheet. Reload the preview and try again."
             ));
         }
     }
