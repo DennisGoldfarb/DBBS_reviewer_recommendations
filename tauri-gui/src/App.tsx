@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -197,6 +197,61 @@ const formatSimilarity = (value: number): string => {
   return `${percent}%`;
 };
 
+const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["txt", "pdf", "doc", "docx"]);
+
+const isFileDragEvent = (event: DragEvent<HTMLDivElement>): boolean => {
+  const types = event.dataTransfer?.types;
+  if (!types) {
+    return false;
+  }
+
+  return Array.from(types).includes("Files");
+};
+
+const extractFilePathFromDropEvent = (
+  event: DragEvent<HTMLDivElement>,
+): string | null => {
+  const { files } = event.dataTransfer ?? {};
+  if (files && files.length > 0) {
+    const file = files[0] as File & { path?: string };
+    if (file && typeof file.path === "string") {
+      const path = file.path;
+      if (path && path.trim().length > 0) {
+        return path;
+      }
+    }
+  }
+
+  const uriList = event.dataTransfer?.getData("text/uri-list");
+  if (uriList) {
+    const [firstUri] = uriList.split("\n");
+    if (firstUri) {
+      try {
+        const parsed = new URL(firstUri.trim());
+        if (parsed.protocol === "file:") {
+          let pathname = parsed.pathname;
+          if (/^\/[A-Za-z]:/.test(pathname)) {
+            pathname = pathname.slice(1);
+          }
+          return decodeURIComponent(pathname);
+        }
+      } catch {
+        if (firstUri.startsWith("file://")) {
+          const withoutScheme = firstUri.replace("file://", "");
+          return decodeURIComponent(withoutScheme);
+        }
+      }
+    }
+  }
+
+  const plainText = event.dataTransfer?.getData("text/plain");
+  if (plainText && plainText.trim().length > 0) {
+    return plainText.trim();
+  }
+
+  return null;
+};
+
 function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
@@ -260,6 +315,7 @@ function App() {
     string | null
   >(null);
   const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
+  const [isDocumentDragActive, setIsDocumentDragActive] = useState(false);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -741,6 +797,71 @@ function App() {
     }
   };
 
+  const handleDocumentDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!isFileDragEvent(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    setIsDocumentDragActive(true);
+  };
+
+  const handleDocumentDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!isFileDragEvent(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!isDocumentDragActive) {
+      setIsDocumentDragActive(true);
+    }
+  };
+
+  const handleDocumentDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setIsDocumentDragActive(false);
+    }
+  };
+
+  const handleDocumentDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDocumentDragActive(false);
+
+    const { files } = event.dataTransfer ?? {};
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    if (files.length > 1) {
+      setError("Drop only one document at a time.");
+      setResult(null);
+      return;
+    }
+
+    const filePath = extractFilePathFromDropEvent(event);
+    if (!filePath) {
+      setError(
+        "Unable to read the dropped file path. Try browsing for the document instead.",
+      );
+      setResult(null);
+      return;
+    }
+
+    const extension = filePath.split(".").pop()?.toLowerCase() ?? "";
+    if (!SUPPORTED_DOCUMENT_EXTENSIONS.has(extension)) {
+      setError("Unsupported document type. Drop a PDF, Word, or text file.");
+      setResult(null);
+      return;
+    }
+
+    setError(null);
+    setResult(null);
+    setDocumentPath(filePath);
+  };
+
   const toggleIdentifierColumn = (index: number) => {
     setSelectedIdentifierColumns((current) => {
       const updated = current.includes(index)
@@ -1036,34 +1157,57 @@ function App() {
             {taskType === "document" && (
               <div className="input-stack">
                 <label>Research interest document</label>
-                <div className="button-row inline">
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() =>
-                      handleFileSelection(setDocumentPath, {
-                        multiple: false,
-                        filters: [
-                          {
-                            name: "Supported documents",
-                            extensions: ["txt", "pdf", "doc", "docx"],
-                          },
-                        ],
-                      })
-                    }
-                  >
-                    Browse…
-                  </button>
-                  <input
-                    type="text"
-                    value={documentPath}
-                    onChange={(event) => setDocumentPath(event.target.value)}
-                    placeholder="Paste or confirm the document path"
-                  />
+                <div
+                  className={`document-drop-zone ${
+                    isDocumentDragActive ? "is-dragging" : ""
+                  }`}
+                  onDragEnter={handleDocumentDragEnter}
+                  onDragOver={handleDocumentDragOver}
+                  onDragLeave={handleDocumentDragLeave}
+                  onDrop={handleDocumentDrop}
+                >
+                  <div className="button-row inline">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        void handleFileSelection(setDocumentPath, {
+                          multiple: false,
+                          filters: [
+                            {
+                              name: "Supported documents",
+                              extensions: ["txt", "pdf", "doc", "docx"],
+                            },
+                          ],
+                        }).then((selection) => {
+                          if (selection) {
+                            setError(null);
+                            setResult(null);
+                          }
+                        });
+                      }}
+                    >
+                      Browse…
+                    </button>
+                    <input
+                      type="text"
+                      value={documentPath}
+                      onChange={(event) => {
+                        setDocumentPath(event.target.value);
+                        setError(null);
+                        setResult(null);
+                      }}
+                      placeholder="Paste or confirm the document path"
+                    />
+                  </div>
+                  <p className="document-drop-message">
+                    Or drag and drop a PDF, Word, or text file from your
+                    computer.
+                  </p>
+                  {documentPath && (
+                    <div className="path-preview">{documentPath}</div>
+                  )}
                 </div>
-                {documentPath && (
-                  <div className="path-preview">{documentPath}</div>
-                )}
               </div>
             )}
 

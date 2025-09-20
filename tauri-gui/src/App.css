@@ -195,6 +195,34 @@ legend {
   color: var(--washu-heading);
 }
 
+.document-drop-zone {
+  border: 2px dashed var(--washu-border);
+  border-radius: 16px;
+  background: var(--washu-surface-muted);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  transition: border-color 0.2s ease, background-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.document-drop-zone:hover {
+  border-color: var(--washu-primary);
+}
+
+.document-drop-zone.is-dragging {
+  border-color: var(--washu-primary);
+  background: var(--washu-primary-soft);
+  box-shadow: 0 12px 26px var(--washu-primary-shadow);
+}
+
+.document-drop-message {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--washu-text-muted);
+}
+
 .input-heading {
   font-weight: 600;
   color: var(--washu-heading);
