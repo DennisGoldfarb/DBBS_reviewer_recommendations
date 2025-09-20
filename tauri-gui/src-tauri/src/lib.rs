@@ -852,7 +852,6 @@ fn process_directory_documents(
         "Similarity".to_string(),
     ];
     headers.extend(index.identifier_columns.clone());
-    headers.push("Faculty Row Index".to_string());
 
     let mut rows = Vec::new();
     for result in &document_results {
@@ -865,7 +864,6 @@ fn process_directory_documents(
             for _ in &index.identifier_columns {
                 row.push(String::new());
             }
-            row.push(String::new());
             rows.push(row);
             continue;
         }
@@ -879,7 +877,6 @@ fn process_directory_documents(
             for label in &index.identifier_columns {
                 row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());
             }
-            row.push(faculty.row_index.to_string());
             rows.push(row);
         }
     }
@@ -2074,6 +2071,26 @@ fn restore_default_faculty_dataset(
     }
 
     Ok(status)
+}
+
+#[tauri::command]
+fn save_generated_spreadsheet(path: String, content: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a location to save the generated spreadsheet.".into());
+    }
+
+    let destination = PathBuf::from(trimmed);
+    if let Some(parent) = destination.parent() {
+        if !parent.exists() {
+            return Err("The selected directory does not exist.".into());
+        }
+    }
+
+    fs::write(&destination, content.as_bytes())
+        .map_err(|err| format!("Unable to save the generated spreadsheet: {err}"))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -3277,7 +3294,8 @@ pub fn run() {
             get_faculty_dataset_status,
             preview_faculty_dataset_replacement,
             replace_faculty_dataset,
-            restore_default_faculty_dataset
+            restore_default_faculty_dataset,
+            save_generated_spreadsheet
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

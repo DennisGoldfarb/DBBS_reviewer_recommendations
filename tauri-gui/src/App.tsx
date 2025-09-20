@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
@@ -951,7 +951,7 @@ function App() {
   }
 };
 
-  const handleDownloadDirectoryResults = useCallback(() => {
+  const handleDownloadDirectoryResults = useCallback(async () => {
     if (!result?.directoryResults) {
       return;
     }
@@ -963,26 +963,44 @@ function App() {
     }
 
     try {
-      const blob = new Blob([spreadsheet.content], {
-        type: spreadsheet.mimeType || "text/tab-separated-values",
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download =
+      const defaultName =
         spreadsheet.filename && spreadsheet.filename.trim().length > 0
-          ? spreadsheet.filename
+          ? spreadsheet.filename.trim()
           : "directory_matches.tsv";
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
+      const extension = defaultName.includes(".")
+        ? defaultName.split(".").pop()?.toLowerCase() ?? "tsv"
+        : "tsv";
+
+      const saveOptions =
+        extension && extension.length > 0
+          ? {
+              defaultPath: defaultName,
+              filters: [
+                {
+                  name: `${extension.toUpperCase()} files`,
+                  extensions: [extension],
+                },
+              ],
+            }
+          : { defaultPath: defaultName };
+
+      const selectedPath = await save(saveOptions);
+      if (!selectedPath) {
+        return;
+      }
+
+      await invoke("save_generated_spreadsheet", {
+        path: selectedPath,
+        content: spreadsheet.content,
+      });
+
+      setError(null);
     } catch (downloadError) {
       const message =
         downloadError instanceof Error
           ? downloadError.message
           : String(downloadError);
-      setError(`Unable to generate the download: ${message}`);
+      setError(`Unable to save the directory results: ${message}`);
     }
   }, [result, setError]);
 
