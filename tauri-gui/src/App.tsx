@@ -92,6 +92,7 @@ interface FacultyMatchResult {
   rowIndex: number;
   similarity: number;
   identifiers: Record<string, string>;
+  facultyText?: string;
 }
 
 interface PromptMatchResult {
@@ -2028,6 +2029,11 @@ function App() {
                                   </span>
                                 )}
                               </div>
+                              {faculty.facultyText && (
+                                <pre className="match-faculty-text">
+                                  {faculty.facultyText}
+                                </pre>
+                              )}
                             </li>
                           );
                         })}

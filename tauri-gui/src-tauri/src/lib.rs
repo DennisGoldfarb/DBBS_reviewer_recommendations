@@ -377,12 +377,24 @@ fn perform_matching_request(
             .as_ref()
             .ok_or_else(|| "The faculty embedding index was not loaded.".to_string())?;
         let prompt_embedding = embed_prompt(&app_handle, embedding_index, &prompt_text)?;
-        let matches = find_best_faculty_matches(
+        let mut matches = find_best_faculty_matches(
             embedding_index,
             &prompt_embedding,
             limit,
             allowed_faculty_rows.as_ref(),
         );
+
+        if matches!(task_type, TaskType::Prompt | TaskType::Document) {
+            if let Err(err) = enrich_matches_with_faculty_text(
+                &app_handle,
+                &embedding_index.embedding_columns,
+                &mut matches,
+            ) {
+                warnings.push(format!(
+                    "Unable to include faculty text in the match results: {err}"
+                ));
+            }
+        }
 
         prompt_matches.push(PromptMatchResult {
             prompt: match task_type {
@@ -530,6 +542,8 @@ struct FacultyMatchResult {
     row_index: usize,
     similarity: f32,
     identifiers: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    faculty_text: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -668,6 +682,7 @@ fn find_best_faculty_matches(
                 row_index: entry.row_index,
                 similarity,
                 identifiers,
+                faculty_text: None,
             })
         })
         .collect();
@@ -679,6 +694,58 @@ fn find_best_faculty_matches(
     });
     candidates.truncate(limit);
     candidates
+}
+
+fn enrich_matches_with_faculty_text(
+    app_handle: &tauri::AppHandle,
+    embedding_columns: &[String],
+    matches: &mut [FacultyMatchResult],
+) -> Result<(), String> {
+    if matches.is_empty() {
+        return Ok(());
+    }
+
+    if embedding_columns.is_empty() {
+        return Ok(());
+    }
+
+    let dataset_path = dataset_destination(app_handle)?;
+    if !dataset_path.exists() {
+        return Err("The faculty dataset could not be located.".into());
+    }
+
+    let (headers, rows) = read_full_spreadsheet(&dataset_path)?;
+    if rows.is_empty() {
+        return Err("The faculty dataset does not include any rows.".into());
+    }
+
+    let header_map = build_header_index_map(&headers);
+    let embedding_indexes = indexes_from_labels(&header_map, embedding_columns)?;
+    if embedding_indexes.is_empty() {
+        return Err(
+            "No embedding columns are available to retrieve faculty text. Re-run the dataset analysis.".into(),
+        );
+    }
+
+    for faculty_match in matches {
+        if let Some(row) = rows.get(faculty_match.row_index) {
+            let mut text_parts = Vec::new();
+            for &index in &embedding_indexes {
+                if let Some(value) = row.get(index) {
+                    let trimmed = value.trim();
+                    if !trimmed.is_empty() {
+                        text_parts.push(trimmed.to_string());
+                    }
+                }
+            }
+
+            if !text_parts.is_empty() {
+                faculty_match.faculty_text = Some(text_parts.join("\n\n"));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn process_directory_documents(
