@@ -741,12 +741,14 @@ fn collect_docx_paragraph_text(
 
 fn collect_docx_table_text(table: &Table, segments: &mut Vec<String>) {
     for row in &table.rows {
-        let TableChild::TableRow(row) = row;
-        let row = row.as_ref();
+        let row = match row {
+            TableChild::TableRow(row) => row,
+        };
 
         for cell in &row.cells {
-            let TableRowChild::TableCell(cell) = cell;
-            let cell = cell.as_ref();
+            let cell = match cell {
+                TableRowChild::TableCell(cell) => cell,
+            };
 
             for content in &cell.children {
                 match content {
