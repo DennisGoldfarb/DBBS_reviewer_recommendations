@@ -1,19 +1,8 @@
 use calamine::{open_workbook_auto, DataType, Reader};
 use chrono::{DateTime, Utc};
 use docx_rs::{
-    documents::{
-        document::DocumentChild,
-        elements::{
-            insert::{Insert, InsertChild},
-            paragraph::{Paragraph, ParagraphChild},
-            run::{Run, RunChild},
-            structured_data_tag::{StructuredDataTag, StructuredDataTagChild},
-            table::{Table, TableChild},
-            table_cell::TableCellContent,
-            table_row::TableRowChild,
-        },
-    },
-    read_docx,
+    read_docx, DocumentChild, Insert, InsertChild, Paragraph, ParagraphChild, Run, RunChild,
+    StructuredDataTag, StructuredDataTagChild, Table, TableCellContent, TableChild, TableRowChild,
 };
 use pdf_extract::extract_text_from_mem;
 use rtf_parser::RtfDocument;
