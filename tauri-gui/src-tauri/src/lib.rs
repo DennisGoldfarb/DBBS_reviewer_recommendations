@@ -4117,7 +4117,7 @@ fn build_summary(
         }
     };
 
-    let mut summary = format!(
+    let summary = format!(
         "Ready to match {input_summary} against {scope_summary}. Each student will receive up to {faculty_per_student} faculty recommendation{plural}.",
         plural = if faculty_per_student == 1 { "" } else { "s" }
     );
