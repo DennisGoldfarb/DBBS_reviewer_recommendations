@@ -741,26 +741,27 @@ fn collect_docx_paragraph_text(
 
 fn collect_docx_table_text(table: &Table, segments: &mut Vec<String>) {
     for row in &table.rows {
-        if let TableChild::TableRow(row) = row {
-            for cell in &row.cells {
-                if let TableRowChild::TableCell(cell) = cell {
-                    for content in &cell.children {
-                        match content {
-                            TableCellContent::Paragraph(paragraph) => {
-                                if let Some(text) = collect_docx_paragraph_text(paragraph, segments)
-                                {
-                                    segments.push(text);
-                                }
-                            }
-                            TableCellContent::Table(inner) => {
-                                collect_docx_table_text(inner, segments);
-                            }
-                            TableCellContent::StructuredDataTag(tag) => {
-                                collect_docx_structured_data_tag(tag.as_ref(), segments);
-                            }
-                            TableCellContent::TableOfContents(_) => {}
+        let TableChild::TableRow(row) = row;
+        let row = row.as_ref();
+
+        for cell in &row.cells {
+            let TableRowChild::TableCell(cell) = cell;
+            let cell = cell.as_ref();
+
+            for content in &cell.children {
+                match content {
+                    TableCellContent::Paragraph(paragraph) => {
+                        if let Some(text) = collect_docx_paragraph_text(paragraph, segments) {
+                            segments.push(text);
                         }
                     }
+                    TableCellContent::Table(inner) => {
+                        collect_docx_table_text(inner, segments);
+                    }
+                    TableCellContent::StructuredDataTag(tag) => {
+                        collect_docx_structured_data_tag(tag.as_ref(), segments);
+                    }
+                    TableCellContent::TableOfContents(_) => {}
                 }
             }
         }
@@ -783,7 +784,7 @@ fn append_paragraph_child_text(
 ) {
     match child {
         ParagraphChild::Run(run) => append_run_text(run.as_ref(), buffer),
-        ParagraphChild::Insert(insert) => append_insert_text(insert, buffer, segments),
+        ParagraphChild::Insert(insert) => append_insert_text(insert, buffer),
         ParagraphChild::Hyperlink(hyperlink) => {
             for inner in &hyperlink.children {
                 append_paragraph_child_text(inner, buffer, segments);
@@ -799,7 +800,7 @@ fn append_paragraph_child_text(
     }
 }
 
-fn append_insert_text(insert: &Insert, buffer: &mut String, segments: &mut Vec<String>) {
+fn append_insert_text(insert: &Insert, buffer: &mut String) {
     for child in &insert.children {
         match child {
             InsertChild::Run(run) => append_run_text(run.as_ref(), buffer),
@@ -859,6 +860,7 @@ fn append_run_text(run: &Run, buffer: &mut String) {
             RunChild::FootnoteReference(_) => {}
             RunChild::Shading(_) => {}
             RunChild::InstrText(_) => {}
+            RunChild::DeleteInstrText(_) => {}
         }
     }
 }
