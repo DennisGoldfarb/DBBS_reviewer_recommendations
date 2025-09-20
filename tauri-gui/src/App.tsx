@@ -639,6 +639,9 @@ function App() {
         "restore_default_faculty_dataset",
       );
       applyDatasetStatus(status, "success");
+      if (status.isValid) {
+        await runEmbeddingRefresh(status);
+      }
     } catch (restoreError) {
       const message =
         restoreError instanceof Error

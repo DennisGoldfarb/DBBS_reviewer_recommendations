@@ -2885,6 +2885,11 @@ fn restore_default_faculty_dataset(
     fs::write(&destination, DEFAULT_FACULTY_DATASET)
         .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
 
+    let embeddings_path = dataset_directory(&app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
+    ensure_dataset_directory(&embeddings_path)?;
+    fs::write(&embeddings_path, DEFAULT_FACULTY_EMBEDDINGS)
+        .map_err(|err| format!("Unable to restore the default faculty embeddings: {err}"))?;
+
     let _ = clear_faculty_dataset_source_path(&app_handle);
 
     let mut status = build_faculty_dataset_status(&app_handle)?;
