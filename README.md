@@ -8,6 +8,6 @@ Once the app window is open, follow the on-screen form from top to bottom. Each 
 1. **Select the student list** – Choose the source that contains the students needing reviewers. This may be a specific cohort, CSV upload, or another named list provided by your organization. The app highlights missing or incompatible choices so you can correct them before moving on.
 2. **Pick eligible faculty** – Indicate which faculty members should be considered. You can include or exclude groups (for example, by department or specialty) and the app will display how many faculty remain in the pool.
 3. **Set recommendation counts** – Decide how many reviewers each student should receive. Enter whole numbers only.
-4. **Match** – The summary at the end shows every decision you made: the student list, selected faculty groups, and recommendation totals.
-5. **Download** -
+4. **Match** – Run the matching step to generate reviewer assignments. The confirmation screen recaps every choice you made—student list, eligible faculty groups, and reviewer counts—so you can double-check before exporting.
+5. **Download** – Export the final recommendations as a CSV or spreadsheet for distribution. The download includes each student and their assigned reviewers, ready to share or import into other systems.
 
