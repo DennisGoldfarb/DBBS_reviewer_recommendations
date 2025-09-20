@@ -55,19 +55,63 @@ jobs:
     steps:
       - name: Determine release tag
         id: release-tag
-        run: echo "value=${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}" >> $GITHUB_OUTPUT
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
+            echo "value=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create GitHub release
         id: create-release
-        uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.release-tag.outputs.value }}
-          release_name: DDBS Reviewer Recommendations v${{ steps.release-tag.outputs.value }}
-          target_commitish: ${{ github.sha }}
-          draft: false
-          prerelease: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release-tag.outputs.value }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repo="${{ github.repository }}"
+          release_tag="${RELEASE_TAG}"
+          release_name="DDBS Reviewer Recommendations v${release_tag}"
+          payload=$(jq -n \
+            --arg tag "$release_tag" \
+            --arg name "$release_name" \
+            --arg target "${{ github.sha }}" \
+            '{tag_name:$tag, name:$name, target_commitish:$target, draft:false, prerelease:false, body:""}')
+
+          response_file=$(mktemp)
+          if gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${repo}/releases" \
+              --input - \
+              >"$response_file" <<<"$payload"; then
+            :
+          else
+            if gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${repo}/releases/tags/${release_tag}" \
+                >"$response_file"; then
+              :
+            else
+              echo "Failed to create or retrieve release for tag ${release_tag}" >&2
+              cat "$response_file" >&2 || true
+              exit 1
+            fi
+          fi
+
+          release_id=$(jq -r '.id // empty' "$response_file")
+          if [[ -z "$release_id" ]]; then
+            echo "Could not determine release id" >&2
+            cat "$response_file" >&2 || true
+            exit 1
+          fi
+
+          rm -f "$response_file"
+
+          echo "id=$release_id" >> "$GITHUB_OUTPUT"
 
   release:
     needs: create-release
