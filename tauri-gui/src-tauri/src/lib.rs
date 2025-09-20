@@ -991,7 +991,6 @@ fn process_prompt_spreadsheet(
 
     #[derive(Debug)]
     struct SpreadsheetRowResult {
-        row_number: usize,
         warning_label: String,
         identifier_values: Vec<String>,
         identifier_label: String,
@@ -1049,7 +1048,6 @@ fn process_prompt_spreadsheet(
         }
 
         let mut result = SpreadsheetRowResult {
-            row_number,
             warning_label,
             identifier_values,
             identifier_label,
