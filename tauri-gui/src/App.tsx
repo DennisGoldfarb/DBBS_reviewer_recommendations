@@ -219,6 +219,7 @@ function App() {
   const [documentPath, setDocumentPath] = useState("");
   const [isDocumentDragActive, setIsDocumentDragActive] = useState(false);
   const documentDropZoneHoverRef = useRef(false);
+  const documentDropZoneElementRef = useRef<HTMLDivElement | null>(null);
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
@@ -941,6 +942,32 @@ function App() {
     ],
   );
 
+  const isPointInsideDocumentDropZone = useCallback(
+    (position: { x: number; y: number } | null | undefined) => {
+      if (!position || typeof window === "undefined") {
+        return false;
+      }
+
+      const element = documentDropZoneElementRef.current;
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const logicalX = position.x / scale;
+      const logicalY = position.y / scale;
+
+      return (
+        logicalX >= rect.left &&
+        logicalX <= rect.right &&
+        logicalY >= rect.top &&
+        logicalY <= rect.bottom
+      );
+    },
+    [],
+  );
+
   const handleDocumentDragEnter = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1004,14 +1031,104 @@ function App() {
       return [];
     };
 
+    const extractPositionFromPayload = (
+      payload: unknown,
+    ): { x: number; y: number } | null => {
+      if (!payload || typeof payload !== "object") {
+        return null;
+      }
+
+      const record = payload as Record<string, unknown>;
+      const candidates = [record.position, record.cursorPosition];
+      for (const candidate of candidates) {
+        if (
+          candidate &&
+          typeof candidate === "object" &&
+          typeof (candidate as { x?: unknown }).x === "number" &&
+          typeof (candidate as { y?: unknown }).y === "number"
+        ) {
+          const value = candidate as { x: number; y: number };
+          return { x: value.x, y: value.y };
+        }
+      }
+
+      return null;
+    };
+
+    const resolvePayloadType = (payload: unknown): string | null => {
+      if (!payload || typeof payload !== "object") {
+        return null;
+      }
+
+      const record = payload as Record<string, unknown>;
+      const candidates = [record.type, record.event, record.state];
+      for (const candidate of candidates) {
+        if (typeof candidate === "string" && candidate.length > 0) {
+          return candidate.toLowerCase();
+        }
+      }
+
+      return null;
+    };
+
     const registerListeners = async () => {
       try {
         const unlistenDrop = await listen("tauri://file-drop", (event) => {
-          if (!documentDropZoneHoverRef.current) {
+          const payloadType = resolvePayloadType(event.payload);
+          const pointerPosition = extractPositionFromPayload(event.payload);
+          const isInsideDropZone = isPointInsideDocumentDropZone(pointerPosition);
+
+          if (
+            payloadType === "hovered" ||
+            payloadType === "hover" ||
+            payloadType === "dragover" ||
+            payloadType === "over"
+          ) {
+            if (isInsideDropZone) {
+              documentDropZoneHoverRef.current = true;
+              if (isActive) {
+                setIsDocumentDragActive(true);
+              }
+            } else if (documentDropZoneHoverRef.current) {
+              documentDropZoneHoverRef.current = false;
+              if (isActive) {
+                setIsDocumentDragActive(false);
+              }
+            }
+            documentUploadDebug(
+              "tauri://file-drop hover",
+              {
+                payloadType,
+                pointerPosition,
+                isInsideDropZone,
+              },
+            );
+            return;
+          }
+
+          if (
+            payloadType === "cancelled" ||
+            payloadType === "canceled" ||
+            payloadType === "cancel"
+          ) {
+            if (documentDropZoneHoverRef.current) {
+              documentUploadDebug("tauri://file-drop cancelled");
+            }
+            documentDropZoneHoverRef.current = false;
+            if (isActive) {
+              setIsDocumentDragActive(false);
+            }
+            return;
+          }
+
+          if (!isInsideDropZone && !documentDropZoneHoverRef.current) {
             documentUploadDebug(
               "tauri://file-drop ignored",
-              "drop zone not active",
-              event.payload,
+              {
+                reason: "outside drop zone",
+                payloadType: payloadType ?? "unknown",
+                pointerPosition,
+              },
             );
             return;
           }
@@ -1027,7 +1144,11 @@ function App() {
             return;
           }
 
-          documentUploadDebug("tauri://file-drop", firstPath);
+          documentUploadDebug("tauri://file-drop", {
+            path: firstPath,
+            payloadType: payloadType ?? "unknown",
+            pointerPosition,
+          });
           acceptDroppedDocumentPath(firstPath);
         });
         unlistenCallbacks.push(unlistenDrop);
@@ -1068,7 +1189,7 @@ function App() {
         }
       }
     };
-  }, [acceptDroppedDocumentPath]);
+  }, [acceptDroppedDocumentPath, isPointInsideDocumentDropZone]);
 
   const handleSpreadsheetPathInput = (value: string) => {
     setSpreadsheetPath(value);
@@ -1460,6 +1581,7 @@ function App() {
                   className={`document-drop-zone${
                     isDocumentDragActive ? " drag-active" : ""
                   }`}
+                  ref={documentDropZoneElementRef}
                   onDragEnter={handleDocumentDragEnter}
                   onDragOver={handleDocumentDragOver}
                   onDragLeave={handleDocumentDragLeave}
