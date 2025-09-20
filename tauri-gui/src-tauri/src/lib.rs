@@ -451,6 +451,14 @@ fn perform_matching_request(
         spreadsheet_results = Some(outcome.results);
     }
 
+    {
+        let mut match_refs: Vec<&mut Vec<FacultyMatchResult>> = prompt_matches
+            .iter_mut()
+            .map(|result| &mut result.faculty_matches)
+            .collect();
+        assign_student_rankings(&mut match_refs);
+    }
+
     Ok(SubmissionResponse {
         summary,
         warnings,
@@ -544,6 +552,10 @@ struct FacultyMatchResult {
     identifiers: HashMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     faculty_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    student_rank_for_faculty: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    student_rank_total: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -683,6 +695,8 @@ fn find_best_faculty_matches(
                 similarity,
                 identifiers,
                 faculty_text: None,
+                student_rank_for_faculty: None,
+                student_rank_total: None,
             })
         })
         .collect();
@@ -694,6 +708,69 @@ fn find_best_faculty_matches(
     });
     candidates.truncate(limit);
     candidates
+}
+
+fn assign_student_rankings(match_sets: &mut [&mut Vec<FacultyMatchResult>]) {
+    if match_sets.is_empty() {
+        return;
+    }
+
+    let mut occurrences: HashMap<usize, Vec<(usize, usize, f32)>> = HashMap::new();
+
+    for (prompt_index, matches) in match_sets.iter().enumerate() {
+        for (match_index, faculty) in matches.iter().enumerate() {
+            occurrences.entry(faculty.row_index).or_default().push((
+                prompt_index,
+                match_index,
+                faculty.similarity,
+            ));
+        }
+    }
+
+    if occurrences.is_empty() {
+        for matches in match_sets.iter_mut() {
+            for faculty in matches.iter_mut() {
+                faculty.student_rank_for_faculty = None;
+                faculty.student_rank_total = None;
+            }
+        }
+        return;
+    }
+
+    let mut rank_map: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+
+    for (_, mut entries) in occurrences {
+        entries.sort_by(|a, b| {
+            let primary = b.2.partial_cmp(&a.2).unwrap_or(Ordering::Equal);
+            if primary != Ordering::Equal {
+                return primary;
+            }
+
+            let secondary = a.0.cmp(&b.0);
+            if secondary != Ordering::Equal {
+                return secondary;
+            }
+
+            a.1.cmp(&b.1)
+        });
+
+        let total = entries.len();
+        for (position, (prompt_index, match_index, _)) in entries.into_iter().enumerate() {
+            rank_map.insert((prompt_index, match_index), (position + 1, total));
+        }
+    }
+
+    for (prompt_index, matches) in match_sets.iter_mut().enumerate() {
+        for (match_index, faculty) in matches.iter_mut().enumerate() {
+            if let Some((rank, total)) = rank_map.get(&(prompt_index, match_index)) {
+                faculty.student_rank_for_faculty = Some(*rank);
+                faculty.student_rank_total = Some(*total);
+            } else {
+                faculty.student_rank_for_faculty = None;
+                faculty.student_rank_total = None;
+            }
+        }
+    }
 }
 
 fn enrich_matches_with_faculty_text(
@@ -765,6 +842,7 @@ fn process_directory_documents(
     struct DirectoryDocumentResult {
         identifier: String,
         preview: String,
+        prompt_label: Option<String>,
         matches: Vec<FacultyMatchResult>,
         status_message: Option<String>,
     }
@@ -816,6 +894,7 @@ fn process_directory_documents(
         let mut result = DirectoryDocumentResult {
             identifier: identifier.clone(),
             preview: String::new(),
+            prompt_label: None,
             matches: Vec::new(),
             status_message: None,
         };
@@ -837,6 +916,12 @@ fn process_directory_documents(
                     result.status_message = Some(message);
                 } else {
                     result.preview = build_prompt_preview(&text);
+                    if result.preview.is_empty() {
+                        result.prompt_label = Some(result.identifier.clone());
+                    } else {
+                        result.prompt_label =
+                            Some(format!("{} — {}", result.identifier, result.preview));
+                    }
                     prompt_text = Some(text);
                 }
             }
@@ -900,14 +985,12 @@ fn process_directory_documents(
 
         for (context_index, context) in contexts.iter().enumerate() {
             let identifier = document_results[context.result_index].identifier.clone();
-            let preview = document_results[context.result_index].preview.clone();
 
             match embedding_map.remove(&context_index) {
                 Some(embedding) => {
                     let matches = find_best_faculty_matches(index, &embedding, limit, allowed_rows);
-                    let matches_for_prompt = matches.clone();
 
-                    if matches_for_prompt.is_empty() {
+                    if matches.is_empty() {
                         document_results[context.result_index].status_message =
                             Some("No faculty matches were returned.".into());
                     } else {
@@ -915,15 +998,6 @@ fn process_directory_documents(
                     }
 
                     document_results[context.result_index].matches = matches;
-                    let prompt_label = if preview.is_empty() {
-                        identifier.clone()
-                    } else {
-                        format!("{identifier} — {preview}")
-                    };
-                    prompt_matches.push(PromptMatchResult {
-                        prompt: prompt_label,
-                        faculty_matches: matches_for_prompt,
-                    });
                 }
                 None => {
                     missing_embeddings += 1;
@@ -934,22 +1008,29 @@ fn process_directory_documents(
                         "The embedding helper did not return an embedding for '{}'.",
                         identifier
                     ));
-
-                    let prompt_label = if preview.is_empty() {
-                        identifier.clone()
-                    } else {
-                        format!("{identifier} — {preview}")
-                    };
-                    prompt_matches.push(PromptMatchResult {
-                        prompt: prompt_label,
-                        faculty_matches: Vec::new(),
-                    });
                 }
             }
         }
     } else if !document_results.is_empty() {
         warnings
             .push("None of the files in the directory contained readable text to embed.".into());
+    }
+
+    {
+        let mut match_refs: Vec<&mut Vec<FacultyMatchResult>> = document_results
+            .iter_mut()
+            .map(|result| &mut result.matches)
+            .collect();
+        assign_student_rankings(&mut match_refs);
+    }
+
+    for result in &document_results {
+        if let Some(label) = &result.prompt_label {
+            prompt_matches.push(PromptMatchResult {
+                prompt: label.clone(),
+                faculty_matches: result.matches.clone(),
+            });
+        }
     }
 
     let processed_documents = if contexts.is_empty() {
@@ -965,7 +1046,8 @@ fn process_directory_documents(
 
     let mut headers = vec![
         "Document".to_string(),
-        "Rank".to_string(),
+        "Faculty rank".to_string(),
+        "Student rank".to_string(),
         "Similarity".to_string(),
     ];
     headers.extend(index.identifier_columns.clone());
@@ -977,7 +1059,12 @@ fn process_directory_documents(
                 .status_message
                 .clone()
                 .unwrap_or_else(|| "No faculty matches were returned.".into());
-            let mut row = vec![result.identifier.clone(), String::new(), message];
+            let mut row = vec![
+                result.identifier.clone(),
+                String::new(),
+                String::new(),
+                message,
+            ];
             for _ in &index.identifier_columns {
                 row.push(String::new());
             }
@@ -986,9 +1073,20 @@ fn process_directory_documents(
         }
 
         for (rank, faculty) in result.matches.iter().enumerate() {
+            let student_rank = faculty
+                .student_rank_for_faculty
+                .map(|value| {
+                    if let Some(total) = faculty.student_rank_total {
+                        format!("#{value} of {total}")
+                    } else {
+                        format!("#{value}")
+                    }
+                })
+                .unwrap_or_default();
             let mut row = vec![
                 result.identifier.clone(),
                 (rank + 1).to_string(),
+                student_rank,
                 format_similarity_percent(faculty.similarity),
             ];
             for label in &index.identifier_columns {
@@ -1064,6 +1162,7 @@ fn process_prompt_spreadsheet(
         identifier_values: Vec<String>,
         identifier_label: String,
         prompt_preview: String,
+        prompt_label: Option<String>,
         matches: Vec<FacultyMatchResult>,
         status_message: Option<String>,
     }
@@ -1129,6 +1228,7 @@ fn process_prompt_spreadsheet(
             identifier_values,
             identifier_label,
             prompt_preview: String::new(),
+            prompt_label: None,
             matches: Vec::new(),
             status_message: None,
         };
@@ -1143,6 +1243,14 @@ fn process_prompt_spreadsheet(
         } else {
             let prompt_text = prompt_parts.join("\n\n");
             result.prompt_preview = build_prompt_preview(&prompt_text);
+            if result.prompt_preview.is_empty() {
+                result.prompt_label = Some(result.identifier_label.clone());
+            } else {
+                result.prompt_label = Some(format!(
+                    "{} — {}",
+                    result.identifier_label, result.prompt_preview
+                ));
+            }
             let result_index = row_results.len();
             contexts.push(SpreadsheetRowContext {
                 result_index,
@@ -1192,28 +1300,18 @@ fn process_prompt_spreadsheet(
 
         for (context_index, context) in contexts.iter().enumerate() {
             let result = &mut row_results[context.result_index];
-            let prompt_label = if result.prompt_preview.is_empty() {
-                result.identifier_label.clone()
-            } else {
-                format!("{} — {}", result.identifier_label, result.prompt_preview)
-            };
 
             match embedding_map.remove(&context_index) {
                 Some(embedding) => {
                     let matches = find_best_faculty_matches(index, &embedding, limit, allowed_rows);
-                    let matches_for_prompt = matches.clone();
 
-                    if matches_for_prompt.is_empty() {
+                    if matches.is_empty() {
                         result.status_message = Some("No faculty matches were returned.".into());
                     } else {
                         result.status_message = None;
                     }
 
                     result.matches = matches;
-                    prompt_matches.push(PromptMatchResult {
-                        prompt: prompt_label,
-                        faculty_matches: matches_for_prompt,
-                    });
                 }
                 None => {
                     missing_embeddings += 1;
@@ -1224,15 +1322,28 @@ fn process_prompt_spreadsheet(
                         result.warning_label
                     ));
                     result.status_message = Some(message.clone());
-                    prompt_matches.push(PromptMatchResult {
-                        prompt: prompt_label,
-                        faculty_matches: Vec::new(),
-                    });
                 }
             }
         }
     } else if !row_results.is_empty() {
         warnings.push("None of the rows in the spreadsheet contained prompt text to embed.".into());
+    }
+
+    {
+        let mut match_refs: Vec<&mut Vec<FacultyMatchResult>> = row_results
+            .iter_mut()
+            .map(|result| &mut result.matches)
+            .collect();
+        assign_student_rankings(&mut match_refs);
+    }
+
+    for result in &row_results {
+        if let Some(label) = &result.prompt_label {
+            prompt_matches.push(PromptMatchResult {
+                prompt: label.clone(),
+                faculty_matches: result.matches.clone(),
+            });
+        }
     }
 
     let processed_rows = if contexts.is_empty() {
@@ -1254,7 +1365,8 @@ fn process_prompt_spreadsheet(
             .map(|label| label.trim().to_string())
             .collect()
     };
-    headers.push("Rank".into());
+    headers.push("Faculty rank".into());
+    headers.push("Student rank".into());
     headers.push("Similarity".into());
     headers.extend(index.identifier_columns.clone());
 
@@ -1267,6 +1379,7 @@ fn process_prompt_spreadsheet(
                 .unwrap_or_else(|| "No faculty matches were returned.".into());
             let mut row = result.identifier_values.clone();
             row.push(String::new());
+            row.push(String::new());
             row.push(message);
             for _ in &index.identifier_columns {
                 row.push(String::new());
@@ -1278,6 +1391,17 @@ fn process_prompt_spreadsheet(
         for (rank, faculty) in result.matches.iter().enumerate() {
             let mut row = result.identifier_values.clone();
             row.push((rank + 1).to_string());
+            let student_rank = faculty
+                .student_rank_for_faculty
+                .map(|value| {
+                    if let Some(total) = faculty.student_rank_total {
+                        format!("#{value} of {total}")
+                    } else {
+                        format!("#{value}")
+                    }
+                })
+                .unwrap_or_default();
+            row.push(student_rank);
             row.push(format_similarity_percent(faculty.similarity));
             for label in &index.identifier_columns {
                 row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());

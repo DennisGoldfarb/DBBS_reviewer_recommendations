@@ -93,6 +93,8 @@ interface FacultyMatchResult {
   similarity: number;
   identifiers: Record<string, string>;
   facultyText?: string;
+  studentRankForFaculty?: number;
+  studentRankTotal?: number;
 }
 
 interface PromptMatchResult {
@@ -222,6 +224,21 @@ const formatSimilarity = (value: number): string => {
 
   const percent = (value * 100).toFixed(1);
   return `${percent}%`;
+};
+
+const formatStudentRank = (
+  rank?: number,
+  total?: number,
+): string | null => {
+  if (typeof rank !== "number") {
+    return null;
+  }
+
+  if (typeof total === "number" && Number.isFinite(total) && total > 0) {
+    return `#${rank} of ${total}`;
+  }
+
+  return `#${rank}`;
 };
 
 function App() {
@@ -1995,6 +2012,10 @@ function App() {
                               return a[0].localeCompare(b[0]);
                             });
                           const hasIdentifiers = sortedIdentifierEntries.length > 0;
+                          const studentRankLabel = formatStudentRank(
+                            faculty.studentRankForFaculty,
+                            faculty.studentRankTotal,
+                          );
 
                           return (
                             <li
@@ -2002,7 +2023,16 @@ function App() {
                               key={`${faculty.rowIndex}-${rank}`}
                             >
                               <div className="match-list-header">
-                                <span className="match-rank">#{rank + 1}</span>
+                                <div className="match-rankings">
+                                  <span className="match-rank">
+                                    Faculty rank #{rank + 1}
+                                  </span>
+                                  {studentRankLabel && (
+                                    <span className="match-student-rank">
+                                      Student rank {studentRankLabel}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="match-score">
                                   Similarity: {formatSimilarity(faculty.similarity)}
                                 </span>
