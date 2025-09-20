@@ -864,10 +864,23 @@ button.theme-toggle:focus-visible {
   gap: 0.75rem;
 }
 
+.match-rankings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+
 .match-rank {
   font-weight: 700;
   color: var(--washu-primary);
   font-size: 1.1rem;
+}
+
+.match-student-rank {
+  font-weight: 600;
+  color: var(--washu-accent);
+  font-size: 0.95rem;
 }
 
 .match-score {
@@ -1107,6 +1120,10 @@ body[data-theme="dark"] .match-list-item {
 
 body[data-theme="dark"] .match-rank {
   color: #93c5fd;
+}
+
+body[data-theme="dark"] .match-student-rank {
+  color: #bfdbfe;
 }
 
 body[data-theme="dark"] .match-score {

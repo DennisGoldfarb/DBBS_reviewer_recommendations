@@ -82,7 +82,6 @@ interface SubmissionDetails {
   programFilters: string[];
   customFacultyPath: string | null;
   recommendationsPerStudent: number;
-  recommendationsPerFaculty: number;
   promptPreview?: string;
   spreadsheetPromptColumns: string[];
   spreadsheetIdentifierColumns: string[];
@@ -93,6 +92,8 @@ interface FacultyMatchResult {
   similarity: number;
   identifiers: Record<string, string>;
   facultyText?: string;
+  studentRankForFaculty?: number;
+  studentRankTotal?: number;
 }
 
 interface PromptMatchResult {
@@ -224,6 +225,21 @@ const formatSimilarity = (value: number): string => {
   return `${percent}%`;
 };
 
+const formatStudentRank = (
+  rank?: number,
+  total?: number,
+): string | null => {
+  if (typeof rank !== "number") {
+    return null;
+  }
+
+  if (typeof total === "number" && Number.isFinite(total) && total > 0) {
+    return `#${rank} of ${total}`;
+  }
+
+  return `#${rank}`;
+};
+
 function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
@@ -235,7 +251,6 @@ function App() {
   const [selectedPrograms, setSelectedPrograms] = useState<ProgramName[]>([]);
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
-  const [studentRecCount, setStudentRecCount] = useState("0");
 
   const [spreadsheetPreview, setSpreadsheetPreview] =
     useState<SpreadsheetPreview | null>(null);
@@ -877,11 +892,6 @@ function App() {
       1,
       Number.parseInt(facultyRecCount, 10) || 0,
     );
-    const studentRecommendations = Math.max(
-      0,
-      Number.parseInt(studentRecCount, 10) || 0,
-    );
-
     if (taskType === "spreadsheet") {
       const trimmedPath = spreadsheetPath.trim();
       if (trimmedPath.length === 0) {
@@ -932,7 +942,6 @@ function App() {
                 ? customFacultyPath.trim()
                 : undefined,
             facultyRecsPerStudent: facultyRecommendations,
-            studentRecsPerFaculty: studentRecommendations,
             spreadsheetPromptColumns:
               taskType === "spreadsheet"
                 ? mapSelectedColumns(selectedPromptColumns)
@@ -1530,15 +1539,6 @@ function App() {
                   onChange={(event) => setFacultyRecCount(event.target.value)}
                 />
               </label>
-              <label>
-                Student recommendations per faculty
-                <input
-                  type="number"
-                  min={0}
-                  value={studentRecCount}
-                  onChange={(event) => setStudentRecCount(event.target.value)}
-                />
-              </label>
             </div>
           </fieldset>
 
@@ -1819,8 +1819,6 @@ function App() {
                 <dl>
                   <dt>Faculty per student</dt>
                   <dd>{result.details.recommendationsPerStudent}</dd>
-                  <dt>Students per faculty</dt>
-                  <dd>{result.details.recommendationsPerFaculty}</dd>
                 </dl>
               </div>
             </div>
@@ -1995,6 +1993,10 @@ function App() {
                               return a[0].localeCompare(b[0]);
                             });
                           const hasIdentifiers = sortedIdentifierEntries.length > 0;
+                          const studentRankLabel = formatStudentRank(
+                            faculty.studentRankForFaculty,
+                            faculty.studentRankTotal,
+                          );
 
                           return (
                             <li
@@ -2002,7 +2004,16 @@ function App() {
                               key={`${faculty.rowIndex}-${rank}`}
                             >
                               <div className="match-list-header">
-                                <span className="match-rank">#{rank + 1}</span>
+                                <div className="match-rankings">
+                                  <span className="match-rank">
+                                    Faculty rank #{rank + 1}
+                                  </span>
+                                  {studentRankLabel && (
+                                    <span className="match-student-rank">
+                                      Student rank {studentRankLabel}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="match-score">
                                   Similarity: {formatSimilarity(faculty.similarity)}
                                 </span>
