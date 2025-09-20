@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
@@ -20,6 +20,21 @@ interface SpreadsheetPreview {
   rows: string[][];
   suggestedPromptColumns: number[];
   suggestedIdentifierColumns: number[];
+}
+
+interface GeneratedSpreadsheet {
+  filename: string;
+  mimeType: string;
+  content: string;
+}
+
+interface DirectoryMatchResults {
+  processedDocuments: number;
+  matchedDocuments: number;
+  skippedDocuments: number;
+  totalRows: number;
+  preview: SpreadsheetPreview;
+  spreadsheet: GeneratedSpreadsheet;
 }
 
 interface FacultyDatasetAnalysis {
@@ -80,6 +95,7 @@ interface SubmissionResponse {
   warnings: string[];
   details: SubmissionDetails;
   promptMatches: PromptMatchResult[];
+  directoryResults?: DirectoryMatchResults;
 }
 
 interface StatusMessage {
@@ -930,14 +946,103 @@ function App() {
           ? submissionError.message
           : String(submissionError);
       setError(message);
-    } finally {
-      setIsSubmitting(false);
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
+  const handleDownloadDirectoryResults = useCallback(async () => {
+    if (!result?.directoryResults) {
+      return;
     }
-  };
+
+    const { spreadsheet } = result.directoryResults;
+    if (!spreadsheet?.content) {
+      setError("The directory results are not available for download.");
+      return;
+    }
+
+    try {
+      const defaultName = (() => {
+        if (spreadsheet.filename && spreadsheet.filename.trim().length > 0) {
+          return spreadsheet.filename.trim();
+        }
+
+        const timestamp = new Date()
+          .toISOString()
+          .replace(/[-:]/g, "")
+          .replace("T", "-")
+          .replace(/\..+/, "");
+        return `DBBS_matches_${timestamp}.tsv`;
+      })();
+      const extension = defaultName.includes(".")
+        ? defaultName.split(".").pop()?.toLowerCase() ?? "tsv"
+        : "tsv";
+
+      const saveOptions =
+        extension && extension.length > 0
+          ? {
+              defaultPath: defaultName,
+              filters: [
+                {
+                  name: `${extension.toUpperCase()} files`,
+                  extensions: [extension],
+                },
+              ],
+            }
+          : { defaultPath: defaultName };
+
+      const selectedPath = await save(saveOptions);
+      if (!selectedPath) {
+        return;
+      }
+
+      await invoke("save_generated_spreadsheet", {
+        path: selectedPath,
+        content: spreadsheet.content,
+      });
+
+      setError(null);
+    } catch (downloadError) {
+      const message =
+        downloadError instanceof Error
+          ? downloadError.message
+          : String(downloadError);
+      setError(`Unable to save the directory results: ${message}`);
+    }
+  }, [result, setError]);
 
   const handleEmbeddingsUpdate = async () => {
     await runEmbeddingRefresh(datasetStatus);
   };
+
+  const directorySummaryText = result?.directoryResults
+    ? (() => {
+        const { processedDocuments, matchedDocuments, skippedDocuments } =
+          result.directoryResults;
+        const sentences: string[] = [];
+        sentences.push(
+          `Processed ${processedDocuments} document${
+            processedDocuments === 1 ? "" : "s"
+          }`,
+        );
+        sentences.push(
+          matchedDocuments === 0
+            ? "No matches were produced"
+            : `${matchedDocuments} document${
+                matchedDocuments === 1 ? "" : "s"
+              } produced matches`,
+        );
+        if (skippedDocuments > 0) {
+          sentences.push(
+            `${skippedDocuments} document${
+              skippedDocuments === 1 ? " was" : "s were"
+            } skipped due to missing content or errors`,
+          );
+        }
+        return `${sentences.join(". ")}.`;
+      })()
+    : null;
 
   return (
     <div className="app-shell">
@@ -1664,7 +1769,73 @@ function App() {
               </div>
             </div>
 
-            {result.promptMatches.length > 0 && (
+            {result.directoryResults && (
+              <section className="directory-results">
+                <h3>Directory match preview</h3>
+                {directorySummaryText && (
+                  <p className="section-description">{directorySummaryText}</p>
+                )}
+                {result.directoryResults.preview.rows.length > 0 ? (
+                  <>
+                    <div className="spreadsheet-preview-card">
+                      <div className="spreadsheet-preview">
+                        <table>
+                          <thead>
+                            <tr>
+                              {result.directoryResults.preview.headers.map(
+                                (header, headerIndex) => (
+                                  <th key={`directory-header-${headerIndex}`}>
+                                    {header}
+                                  </th>
+                                ),
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.directoryResults.preview.rows.map(
+                              (row, rowIndex) => (
+                                <tr key={`directory-row-${rowIndex}`}>
+                                  {row.map((cell, cellIndex) => (
+                                    <td
+                                      key={`directory-cell-${rowIndex}-${cellIndex}`}
+                                    >
+                                      {cell}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <p className="small-note">
+                      Showing {result.directoryResults.preview.rows.length}
+                      {result.directoryResults.totalRows >
+                      result.directoryResults.preview.rows.length
+                        ? ` of ${result.directoryResults.totalRows}`
+                        : ""}{" "}
+                      row{result.directoryResults.totalRows === 1 ? "" : "s"}.
+                    </p>
+                  </>
+                ) : (
+                  <p className="small-note">
+                    No match rows were generated for the available documents.
+                  </p>
+                )}
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handleDownloadDirectoryResults}
+                  >
+                    Download match spreadsheet
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {result.promptMatches.length > 0 && !result.directoryResults && (
               <section className="match-results">
                 {result.promptMatches.map((match, matchIndex) => (
                   <article className="match-card" key={`match-${matchIndex}`}>

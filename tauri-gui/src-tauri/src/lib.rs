@@ -111,6 +111,8 @@ struct SubmissionResponse {
     warnings: Vec<String>,
     details: SubmissionDetails,
     prompt_matches: Vec<PromptMatchResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    directory_results: Option<DirectoryMatchResults>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -222,6 +224,7 @@ fn perform_matching_request(
     let mut selected_prompt_columns = Vec::new();
     let mut selected_identifier_columns = Vec::new();
     let mut prepared_prompt_text: Option<String> = None;
+    let mut directory_source: Option<PathBuf> = None;
 
     match task_type {
         TaskType::Prompt => {
@@ -278,6 +281,7 @@ fn perform_matching_request(
                 }
             }
             validated_paths.push(PathConfirmation::new("Directory", &directory));
+            directory_source = Some(directory);
         }
     }
 
@@ -344,18 +348,30 @@ fn perform_matching_request(
     );
 
     let mut prompt_matches = Vec::new();
-    if let Some(prompt_text) = prepared_prompt_text {
-        let embedding_index = load_faculty_embedding_index(&app_handle)?;
-        if embedding_index.entries.is_empty() {
+    let mut directory_results = None;
+
+    let needs_prompt_embedding =
+        prepared_prompt_text.is_some() || matches!(task_type, TaskType::Directory);
+    let mut faculty_embedding_index: Option<FacultyEmbeddingIndex> = None;
+
+    if needs_prompt_embedding {
+        let index = load_faculty_embedding_index(&app_handle)?;
+        if index.entries.is_empty() {
             return Err(
                 "No faculty embeddings are available. Generate embeddings before matching.".into(),
             );
         }
+        faculty_embedding_index = Some(index);
+    }
 
+    if let Some(prompt_text) = prepared_prompt_text {
         let limit = faculty_recs_per_student.max(1) as usize;
-        let prompt_embedding = embed_prompt(&app_handle, &embedding_index, &prompt_text)?;
+        let embedding_index = faculty_embedding_index
+            .as_ref()
+            .ok_or_else(|| "The faculty embedding index was not loaded.".to_string())?;
+        let prompt_embedding = embed_prompt(&app_handle, embedding_index, &prompt_text)?;
         let matches = find_best_faculty_matches(
-            &embedding_index,
+            embedding_index,
             &prompt_embedding,
             limit,
             allowed_faculty_rows.as_ref(),
@@ -370,11 +386,34 @@ fn perform_matching_request(
         });
     }
 
+    if matches!(task_type, TaskType::Directory) {
+        let directory_path = directory_source
+            .as_ref()
+            .ok_or_else(|| "The directory path was not preserved during processing.".to_string())?;
+        let embedding_index = faculty_embedding_index
+            .as_ref()
+            .ok_or_else(|| "The faculty embedding index was not loaded.".to_string())?;
+        let limit = faculty_recs_per_student.max(1) as usize;
+
+        let outcome = process_directory_documents(
+            &app_handle,
+            directory_path,
+            embedding_index,
+            limit,
+            allowed_faculty_rows.as_ref(),
+        )?;
+
+        warnings.extend(outcome.warnings);
+        prompt_matches.extend(outcome.prompt_matches);
+        directory_results = Some(outcome.results);
+    }
+
     Ok(SubmissionResponse {
         summary,
         warnings,
         details,
         prompt_matches,
+        directory_results,
     })
 }
 
@@ -459,6 +498,32 @@ struct FacultyMatchResult {
     row_index: usize,
     similarity: f32,
     identifiers: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GeneratedSpreadsheet {
+    filename: String,
+    mime_type: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryMatchResults {
+    processed_documents: usize,
+    matched_documents: usize,
+    skipped_documents: usize,
+    total_rows: usize,
+    preview: SpreadsheetPreview,
+    spreadsheet: GeneratedSpreadsheet,
+}
+
+#[derive(Debug)]
+struct DirectoryProcessingOutcome {
+    warnings: Vec<String>,
+    prompt_matches: Vec<PromptMatchResult>,
+    results: DirectoryMatchResults,
 }
 
 fn load_faculty_embedding_index(
@@ -564,6 +629,314 @@ fn find_best_faculty_matches(
     });
     candidates.truncate(limit);
     candidates
+}
+
+fn process_directory_documents(
+    app_handle: &tauri::AppHandle,
+    directory: &Path,
+    index: &FacultyEmbeddingIndex,
+    limit: usize,
+    allowed_rows: Option<&HashSet<usize>>,
+) -> Result<DirectoryProcessingOutcome, String> {
+    #[derive(Debug)]
+    struct DirectoryDocumentContext {
+        result_index: usize,
+        prompt: String,
+    }
+
+    #[derive(Debug)]
+    struct DirectoryDocumentResult {
+        identifier: String,
+        preview: String,
+        matches: Vec<FacultyMatchResult>,
+        status_message: Option<String>,
+    }
+
+    let mut warnings = Vec::new();
+    let mut document_results: Vec<DirectoryDocumentResult> = Vec::new();
+    let mut contexts: Vec<DirectoryDocumentContext> = Vec::new();
+    let mut file_paths: Vec<PathBuf> = Vec::new();
+
+    let reader = fs::read_dir(directory).map_err(|err| {
+        format!(
+            "Unable to read the directory '{}': {err}",
+            directory.display()
+        )
+    })?;
+
+    for entry in reader {
+        match entry {
+            Ok(entry) => {
+                let path = entry.path();
+                match entry.file_type() {
+                    Ok(file_type) => {
+                        if file_type.is_file() {
+                            file_paths.push(path);
+                        }
+                    }
+                    Err(err) => warnings.push(format!(
+                        "Skipped '{}': unable to determine the file type ({err}).",
+                        path.to_string_lossy()
+                    )),
+                }
+            }
+            Err(err) => warnings.push(format!(
+                "Unable to read an entry in '{}': {err}",
+                directory.display()
+            )),
+        }
+    }
+
+    file_paths.sort();
+
+    for path in file_paths {
+        let identifier = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+
+        let mut result = DirectoryDocumentResult {
+            identifier: identifier.clone(),
+            preview: String::new(),
+            matches: Vec::new(),
+            status_message: None,
+        };
+        let mut prompt_text: Option<String> = None;
+
+        match extract_document_prompt(&path) {
+            Ok(DocumentExtractionResult {
+                text,
+                warnings: extraction_warnings,
+            }) => {
+                for warning in extraction_warnings {
+                    warnings.push(format!("{identifier}: {warning}"));
+                }
+
+                if text.trim().is_empty() {
+                    let message =
+                        format!("Skipped '{identifier}' because it did not contain readable text.");
+                    warnings.push(message.clone());
+                    result.status_message = Some(message);
+                } else {
+                    result.preview = build_prompt_preview(&text);
+                    prompt_text = Some(text);
+                }
+            }
+            Err(err) => {
+                warnings.push(err.clone());
+                result.status_message = Some(err);
+            }
+        }
+
+        let result_index = document_results.len();
+        if let Some(text) = prompt_text {
+            contexts.push(DirectoryDocumentContext {
+                result_index,
+                prompt: text,
+            });
+        }
+
+        document_results.push(result);
+    }
+
+    if document_results.is_empty() {
+        warnings.push("The selected directory did not contain any files to process.".into());
+    }
+
+    let mut prompt_matches = Vec::new();
+    let mut missing_embeddings = 0usize;
+
+    if !contexts.is_empty() {
+        let model_name = if index.model.trim().is_empty() {
+            DEFAULT_EMBEDDING_MODEL.to_string()
+        } else {
+            index.model.clone()
+        };
+
+        let payload = EmbeddingRequestPayload {
+            model: model_name,
+            texts: contexts
+                .iter()
+                .enumerate()
+                .map(|(id, context)| EmbeddingRequestRow {
+                    id,
+                    text: context.prompt.clone(),
+                })
+                .collect(),
+            item_label: Some("document".into()),
+            item_label_plural: Some("documents".into()),
+        };
+
+        let response = run_embedding_helper(app_handle, &payload)?;
+        if response.dimension != index.dimension {
+            return Err(format!(
+                "The document embedding dimension ({}) does not match the faculty embedding dimension ({}).",
+                response.dimension, index.dimension
+            ));
+        }
+
+        let mut embedding_map: HashMap<usize, Vec<f32>> = HashMap::new();
+        for row in response.rows {
+            embedding_map.insert(row.id, row.embedding);
+        }
+
+        for (context_index, context) in contexts.iter().enumerate() {
+            let identifier = document_results[context.result_index].identifier.clone();
+            let preview = document_results[context.result_index].preview.clone();
+
+            match embedding_map.remove(&context_index) {
+                Some(embedding) => {
+                    let matches = find_best_faculty_matches(index, &embedding, limit, allowed_rows);
+                    let matches_for_prompt = matches.clone();
+
+                    if matches_for_prompt.is_empty() {
+                        document_results[context.result_index].status_message =
+                            Some("No faculty matches were returned.".into());
+                    } else {
+                        document_results[context.result_index].status_message = None;
+                    }
+
+                    document_results[context.result_index].matches = matches;
+                    let prompt_label = if preview.is_empty() {
+                        identifier.clone()
+                    } else {
+                        format!("{identifier} — {preview}")
+                    };
+                    prompt_matches.push(PromptMatchResult {
+                        prompt: prompt_label,
+                        faculty_matches: matches_for_prompt,
+                    });
+                }
+                None => {
+                    missing_embeddings += 1;
+                    let message = "The embedding helper did not return a result for this document."
+                        .to_string();
+                    document_results[context.result_index].status_message = Some(message.clone());
+                    warnings.push(format!(
+                        "The embedding helper did not return an embedding for '{}'.",
+                        identifier
+                    ));
+
+                    let prompt_label = if preview.is_empty() {
+                        identifier.clone()
+                    } else {
+                        format!("{identifier} — {preview}")
+                    };
+                    prompt_matches.push(PromptMatchResult {
+                        prompt: prompt_label,
+                        faculty_matches: Vec::new(),
+                    });
+                }
+            }
+        }
+    } else if !document_results.is_empty() {
+        warnings
+            .push("None of the files in the directory contained readable text to embed.".into());
+    }
+
+    let processed_documents = if contexts.is_empty() {
+        0
+    } else {
+        contexts.len().saturating_sub(missing_embeddings)
+    };
+    let skipped_documents = document_results.len().saturating_sub(processed_documents);
+    let matched_documents = document_results
+        .iter()
+        .filter(|result| !result.matches.is_empty())
+        .count();
+
+    let mut headers = vec![
+        "Document".to_string(),
+        "Rank".to_string(),
+        "Similarity".to_string(),
+    ];
+    headers.extend(index.identifier_columns.clone());
+
+    let mut rows = Vec::new();
+    for result in &document_results {
+        if result.matches.is_empty() {
+            let message = result
+                .status_message
+                .clone()
+                .unwrap_or_else(|| "No faculty matches were returned.".into());
+            let mut row = vec![result.identifier.clone(), String::new(), message];
+            for _ in &index.identifier_columns {
+                row.push(String::new());
+            }
+            rows.push(row);
+            continue;
+        }
+
+        for (rank, faculty) in result.matches.iter().enumerate() {
+            let mut row = vec![
+                result.identifier.clone(),
+                (rank + 1).to_string(),
+                format_similarity_percent(faculty.similarity),
+            ];
+            for label in &index.identifier_columns {
+                row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());
+            }
+            rows.push(row);
+        }
+    }
+
+    let preview_rows: Vec<Vec<String>> = rows.iter().take(20).cloned().collect();
+    let preview = SpreadsheetPreview {
+        headers: headers.clone(),
+        rows: preview_rows,
+        suggested_prompt_columns: Vec::new(),
+        suggested_identifier_columns: Vec::new(),
+    };
+
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(b'\t')
+        .from_writer(Vec::new());
+    writer
+        .write_record(headers.iter())
+        .map_err(|err| format!("Unable to write the directory match header row: {err}"))?;
+    for row in &rows {
+        writer
+            .write_record(row.iter())
+            .map_err(|err| format!("Unable to write a directory match row: {err}"))?;
+    }
+    let tsv_bytes = writer
+        .into_inner()
+        .map_err(|err| format!("Unable to finalize the directory match spreadsheet: {err}"))?;
+    let tsv_content = String::from_utf8(tsv_bytes)
+        .map_err(|err| format!("The directory match spreadsheet contained invalid UTF-8: {err}"))?;
+
+    let results = DirectoryMatchResults {
+        processed_documents,
+        matched_documents,
+        skipped_documents,
+        total_rows: rows.len(),
+        preview,
+        spreadsheet: GeneratedSpreadsheet {
+            filename: default_directory_spreadsheet_name(),
+            mime_type: "text/tab-separated-values".into(),
+            content: tsv_content,
+        },
+    };
+
+    Ok(DirectoryProcessingOutcome {
+        warnings,
+        prompt_matches,
+        results,
+    })
+}
+
+fn default_directory_spreadsheet_name() -> String {
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    format!("DBBS_matches_{timestamp}.tsv")
+}
+
+fn format_similarity_percent(value: f32) -> String {
+    if value.is_finite() {
+        format!("{:.1}%", value * 100.0)
+    } else {
+        "n/a".into()
+    }
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
@@ -1703,6 +2076,26 @@ fn restore_default_faculty_dataset(
     }
 
     Ok(status)
+}
+
+#[tauri::command]
+fn save_generated_spreadsheet(path: String, content: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a location to save the generated spreadsheet.".into());
+    }
+
+    let destination = PathBuf::from(trimmed);
+    if let Some(parent) = destination.parent() {
+        if !parent.exists() {
+            return Err("The selected directory does not exist.".into());
+        }
+    }
+
+    fs::write(&destination, content.as_bytes())
+        .map_err(|err| format!("Unable to save the generated spreadsheet: {err}"))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2906,7 +3299,8 @@ pub fn run() {
             get_faculty_dataset_status,
             preview_faculty_dataset_replacement,
             replace_faculty_dataset,
-            restore_default_faculty_dataset
+            restore_default_faculty_dataset,
+            save_generated_spreadsheet
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
