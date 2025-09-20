@@ -82,7 +82,6 @@ interface SubmissionDetails {
   programFilters: string[];
   customFacultyPath: string | null;
   recommendationsPerStudent: number;
-  recommendationsPerFaculty: number;
   promptPreview?: string;
   spreadsheetPromptColumns: string[];
   spreadsheetIdentifierColumns: string[];
@@ -252,7 +251,6 @@ function App() {
   const [selectedPrograms, setSelectedPrograms] = useState<ProgramName[]>([]);
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
-  const [studentRecCount, setStudentRecCount] = useState("0");
 
   const [spreadsheetPreview, setSpreadsheetPreview] =
     useState<SpreadsheetPreview | null>(null);
@@ -894,11 +892,6 @@ function App() {
       1,
       Number.parseInt(facultyRecCount, 10) || 0,
     );
-    const studentRecommendations = Math.max(
-      0,
-      Number.parseInt(studentRecCount, 10) || 0,
-    );
-
     if (taskType === "spreadsheet") {
       const trimmedPath = spreadsheetPath.trim();
       if (trimmedPath.length === 0) {
@@ -949,7 +942,6 @@ function App() {
                 ? customFacultyPath.trim()
                 : undefined,
             facultyRecsPerStudent: facultyRecommendations,
-            studentRecsPerFaculty: studentRecommendations,
             spreadsheetPromptColumns:
               taskType === "spreadsheet"
                 ? mapSelectedColumns(selectedPromptColumns)
@@ -1547,15 +1539,6 @@ function App() {
                   onChange={(event) => setFacultyRecCount(event.target.value)}
                 />
               </label>
-              <label>
-                Student recommendations per faculty
-                <input
-                  type="number"
-                  min={0}
-                  value={studentRecCount}
-                  onChange={(event) => setStudentRecCount(event.target.value)}
-                />
-              </label>
             </div>
           </fieldset>
 
@@ -1836,8 +1819,6 @@ function App() {
                 <dl>
                   <dt>Faculty per student</dt>
                   <dd>{result.details.recommendationsPerStudent}</dd>
-                  <dt>Students per faculty</dt>
-                  <dd>{result.details.recommendationsPerFaculty}</dd>
                 </dl>
               </div>
             </div>

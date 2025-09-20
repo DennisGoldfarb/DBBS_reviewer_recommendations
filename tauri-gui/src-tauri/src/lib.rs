@@ -66,7 +66,6 @@ struct SubmissionPayload {
     #[serde(default)]
     custom_faculty_path: Option<String>,
     faculty_recs_per_student: u32,
-    student_recs_per_faculty: u32,
     #[serde(default)]
     spreadsheet_prompt_columns: Vec<String>,
     #[serde(default)]
@@ -98,7 +97,6 @@ struct SubmissionDetails {
     program_filters: Vec<String>,
     custom_faculty_path: Option<String>,
     recommendations_per_student: u32,
-    recommendations_per_faculty: u32,
     prompt_preview: Option<String>,
     spreadsheet_prompt_columns: Vec<String>,
     spreadsheet_identifier_columns: Vec<String>,
@@ -211,7 +209,6 @@ fn perform_matching_request(
         program_filters,
         custom_faculty_path,
         faculty_recs_per_student,
-        student_recs_per_faculty,
         spreadsheet_prompt_columns,
         spreadsheet_identifier_columns,
     } = payload;
@@ -338,7 +335,6 @@ fn perform_matching_request(
         },
         custom_faculty_path: faculty_roster_path.clone(),
         recommendations_per_student: faculty_recs_per_student,
-        recommendations_per_faculty: student_recs_per_faculty,
         prompt_preview,
         spreadsheet_prompt_columns: selected_prompt_columns.clone(),
         spreadsheet_identifier_columns: detail_identifier_columns.clone(),
@@ -348,7 +344,6 @@ fn perform_matching_request(
         &task_type,
         &faculty_scope,
         faculty_recs_per_student,
-        student_recs_per_faculty,
         details.program_filters.len(),
         faculty_roster_path.is_some(),
     );
@@ -3798,7 +3793,6 @@ fn build_summary(
     task_type: &TaskType,
     faculty_scope: &FacultyScope,
     faculty_per_student: u32,
-    students_per_faculty: u32,
     program_count: usize,
     has_custom_roster: bool,
 ) -> String {
@@ -3828,13 +3822,6 @@ fn build_summary(
         "Ready to match {input_summary} against {scope_summary}. Each student will receive up to {faculty_per_student} faculty recommendation{plural}.",
         plural = if faculty_per_student == 1 { "" } else { "s" }
     );
-
-    if students_per_faculty > 0 {
-        summary.push_str(&format!(
-            " Each faculty member will receive up to {students_per_faculty} student recommendation{plural}.",
-            plural = if students_per_faculty == 1 { "" } else { "s" }
-        ));
-    }
 
     summary
 }
