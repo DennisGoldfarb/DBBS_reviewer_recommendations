@@ -349,6 +349,51 @@ button.theme-toggle:focus-visible {
   color: var(--washu-text-muted);
 }
 
+.document-drop-zone {
+  margin-top: 0.5rem;
+  border: 2px dashed var(--washu-border);
+  border-radius: 16px;
+  padding: 1.25rem;
+  background: var(--washu-surface-muted);
+  color: var(--washu-text-muted);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.document-drop-zone.active {
+  border-color: var(--washu-primary);
+  background: var(--washu-primary-soft);
+  color: var(--washu-primary);
+  box-shadow: 0 0 0 3px var(--washu-primary-soft);
+}
+
+.document-drop-zone-title {
+  font-weight: 600;
+  color: inherit;
+}
+
+.document-drop-zone-subtitle {
+  font-size: 0.85rem;
+  color: inherit;
+}
+
+.document-drop-error {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.95rem;
+  border-radius: 12px;
+  background: var(--washu-danger-soft);
+  border: 1px solid var(--washu-danger-border-strong);
+  color: var(--washu-danger);
+  font-size: 0.9rem;
+}
+
 .path-preview {
   font-size: 0.95rem;
   color: var(--washu-text-muted);

@@ -1,7 +1,8 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 type TaskType = "prompt" | "document" | "spreadsheet" | "directory";
@@ -197,10 +198,67 @@ const formatSimilarity = (value: number): string => {
   return `${percent}%`;
 };
 
+const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["pdf", "doc", "docx", "txt"]);
+
+const normalizeDroppedPath = (rawPath: string): string => {
+  const trimmed = rawPath.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+
+  if (trimmed.startsWith("file://")) {
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol === "file:") {
+        const decodedPath = decodeURIComponent(url.pathname);
+        if (url.hostname) {
+          const networkPath = decodedPath
+            .split("/")
+            .filter((segment) => segment.length > 0)
+            .join("\\");
+          return `\\\\${url.hostname}${
+            networkPath.length > 0 ? `\\${networkPath}` : ""
+          }`;
+        }
+
+        if (decodedPath.startsWith("/") && decodedPath[2] === ":") {
+          return decodedPath.slice(1);
+        }
+
+        return decodedPath;
+      }
+    } catch {
+      try {
+        return decodeURIComponent(trimmed.replace(/^file:\/\//, ""));
+      } catch {
+        return trimmed;
+      }
+    }
+  }
+
+  return trimmed;
+};
+
+const hasSupportedDocumentExtension = (path: string): boolean => {
+  const lower = path.toLowerCase();
+  for (const extension of SUPPORTED_DOCUMENT_EXTENSIONS) {
+    if (lower.endsWith(`.${extension}`)) {
+      return true;
+    }
+  }
+  return false;
+};
+
 function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
   const [documentPath, setDocumentPath] = useState("");
+  const documentDropZoneRef = useRef<HTMLDivElement | null>(null);
+  const [documentDropError, setDocumentDropError] = useState<string | null>(
+    null,
+  );
+  const [isDocumentDropTargetActive, setDocumentDropTargetActive] =
+    useState(false);
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
@@ -261,6 +319,16 @@ function App() {
   >(null);
   const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
 
+  const updateDocumentPath = useCallback(
+    (value: string) => {
+      setDocumentPath(value);
+      setDocumentDropError(null);
+      setError(null);
+      setResult(null);
+    },
+    [setDocumentPath, setDocumentDropError, setError, setResult],
+  );
+
   useEffect(() => {
     if (typeof document === "undefined") {
       return;
@@ -275,6 +343,13 @@ function App() {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (taskType !== "document") {
+      setDocumentDropTargetActive(false);
+      setDocumentDropError(null);
+    }
+  }, [taskType]);
 
   const toggleTheme = () => {
     setTheme((current) => (current === "light" ? "dark" : "light"));
@@ -621,6 +696,238 @@ function App() {
       resetSpreadsheetConfiguration();
     }
   };
+
+  const isPointWithinDocumentDropZone = useCallback(
+    (position: { x: number; y: number } | null | undefined) => {
+      if (!position) {
+        return false;
+      }
+
+      const zone = documentDropZoneRef.current;
+      if (!zone) {
+        return false;
+      }
+
+      if (typeof window === "undefined") {
+        return false;
+      }
+
+      const rect = zone.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const logicalX = position.x / scale;
+      const logicalY = position.y / scale;
+
+      return (
+        logicalX >= rect.left &&
+        logicalX <= rect.right &&
+        logicalY >= rect.top &&
+        logicalY <= rect.bottom
+      );
+    },
+    [],
+  );
+
+  const handleDocumentDropPaths = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) {
+        return false;
+      }
+
+      if (paths.length > 1) {
+        setDocumentDropError("Please drop only a single document.");
+        return false;
+      }
+
+      const normalized = normalizeDroppedPath(paths[0]);
+      if (normalized.length === 0) {
+        setDocumentDropError("Please drop a valid document file.");
+        return false;
+      }
+
+      if (!hasSupportedDocumentExtension(normalized)) {
+        setDocumentDropError(
+          "Unsupported file type. Please drop a PDF, Word (.doc/.docx), or plain text (.txt) document.",
+        );
+        return false;
+      }
+
+      updateDocumentPath(normalized);
+      return true;
+    },
+    [setDocumentDropError, updateDocumentPath],
+  );
+
+  const handleDocumentDropFromDataTransfer = useCallback(
+    (dataTransfer: DataTransfer | null) => {
+      if (!dataTransfer) {
+        return false;
+      }
+
+      if (dataTransfer.files && dataTransfer.files.length > 0) {
+        const paths: string[] = [];
+        for (let index = 0; index < dataTransfer.files.length; index += 1) {
+          const file = dataTransfer.files.item(index) as
+            | (File & { path?: string | undefined })
+            | null;
+          if (!file) {
+            continue;
+          }
+          if (typeof file.path === "string" && file.path.length > 0) {
+            paths.push(file.path);
+          }
+        }
+
+        if (paths.length > 0) {
+          return handleDocumentDropPaths(paths);
+        }
+
+        if (dataTransfer.files.length > 1) {
+          setDocumentDropError("Please drop only a single document.");
+          return false;
+        }
+      }
+
+      const uriList = dataTransfer.getData("text/uri-list");
+      if (uriList) {
+        const candidates = uriList
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0 && !line.startsWith("#"));
+        if (candidates.length > 0) {
+          return handleDocumentDropPaths(candidates);
+        }
+      }
+
+      const plainText = dataTransfer.getData("text/plain");
+      if (plainText) {
+        const candidate = plainText.trim();
+        if (candidate.length > 0) {
+          return handleDocumentDropPaths([candidate]);
+        }
+      }
+
+      return false;
+    },
+    [handleDocumentDropPaths, setDocumentDropError],
+  );
+
+  const handleDocumentDragEnter = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      const types = Array.from(event.dataTransfer?.types ?? []);
+      if (!types.includes("Files")) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDocumentDropError(null);
+      setDocumentDropTargetActive(true);
+    },
+    [],
+  );
+
+  const handleDocumentDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      const types = Array.from(event.dataTransfer?.types ?? []);
+      if (!types.includes("Files")) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      if (!isDocumentDropTargetActive) {
+        setDocumentDropTargetActive(true);
+      }
+    },
+    [isDocumentDropTargetActive],
+  );
+
+  const handleDocumentDragLeave = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      const related = event.relatedTarget as Node | null;
+      if (related && event.currentTarget.contains(related)) {
+        return;
+      }
+      setDocumentDropTargetActive(false);
+    },
+    [],
+  );
+
+  const handleDocumentDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      handleDocumentDropFromDataTransfer(event.dataTransfer ?? null);
+      setDocumentDropTargetActive(false);
+    },
+    [handleDocumentDropFromDataTransfer],
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+    let unlisten: UnlistenFn | null = null;
+
+    try {
+      const currentWindow = getCurrentWindow();
+
+      currentWindow
+        .onDragDropEvent((event) => {
+          if (!isMounted || taskType !== "document") {
+            return;
+          }
+
+          const payload = event.payload;
+          if (!payload) {
+            return;
+          }
+
+          if (payload.type === "leave") {
+            setDocumentDropTargetActive(false);
+            return;
+          }
+
+          if (payload.type === "enter" || payload.type === "over") {
+            const inside = isPointWithinDocumentDropZone(payload.position);
+            setDocumentDropTargetActive(inside);
+            if (inside) {
+              setDocumentDropError(null);
+            }
+            return;
+          }
+
+          if (payload.type === "drop") {
+            const inside = isPointWithinDocumentDropZone(payload.position);
+            setDocumentDropTargetActive(false);
+            if (inside) {
+              handleDocumentDropPaths(payload.paths ?? []);
+            }
+          }
+        })
+        .then((fn) => {
+          if (!isMounted) {
+            fn();
+            return;
+          }
+          unlisten = fn;
+        })
+        .catch(() => {
+          /* ignore drag and drop binding errors */
+        });
+    } catch {
+      /* ignore drag and drop setup errors */
+    }
+
+    return () => {
+      isMounted = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [
+    taskType,
+    handleDocumentDropPaths,
+    isPointWithinDocumentDropZone,
+    setDocumentDropError,
+  ]);
 
   const handleFacultyScopeChange = (value: FacultyScope) => {
     if (value === "program" && availablePrograms.length === 0) {
@@ -1041,7 +1348,7 @@ function App() {
                     type="button"
                     className="secondary"
                     onClick={() =>
-                      handleFileSelection(setDocumentPath, {
+                      handleFileSelection(updateDocumentPath, {
                         multiple: false,
                         filters: [
                           {
@@ -1057,10 +1364,30 @@ function App() {
                   <input
                     type="text"
                     value={documentPath}
-                    onChange={(event) => setDocumentPath(event.target.value)}
+                    onChange={(event) => updateDocumentPath(event.target.value)}
                     placeholder="Paste or confirm the document path"
                   />
                 </div>
+                <div
+                  ref={documentDropZoneRef}
+                  className={`document-drop-zone${
+                    isDocumentDropTargetActive ? " active" : ""
+                  }`}
+                  onDragEnter={handleDocumentDragEnter}
+                  onDragOver={handleDocumentDragOver}
+                  onDragLeave={handleDocumentDragLeave}
+                  onDrop={handleDocumentDrop}
+                >
+                  <div className="document-drop-zone-title">
+                    Drag &amp; drop a PDF, Word, or text file here
+                  </div>
+                  <div className="document-drop-zone-subtitle">
+                    Supported types: .pdf, .doc, .docx, .txt
+                  </div>
+                </div>
+                {documentDropError && (
+                  <div className="document-drop-error">{documentDropError}</div>
+                )}
                 {documentPath && (
                   <div className="path-preview">{documentPath}</div>
                 )}
