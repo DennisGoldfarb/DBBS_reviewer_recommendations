@@ -963,10 +963,18 @@ function App() {
     }
 
     try {
-      const defaultName =
-        spreadsheet.filename && spreadsheet.filename.trim().length > 0
-          ? spreadsheet.filename.trim()
-          : "directory_matches.tsv";
+      const defaultName = (() => {
+        if (spreadsheet.filename && spreadsheet.filename.trim().length > 0) {
+          return spreadsheet.filename.trim();
+        }
+
+        const timestamp = new Date()
+          .toISOString()
+          .replace(/[-:]/g, "")
+          .replace("T", "-")
+          .replace(/\..+/, "");
+        return `DBBS_matches_${timestamp}.tsv`;
+      })();
       const extension = defaultName.includes(".")
         ? defaultName.split(".").pop()?.toLowerCase() ?? "tsv"
         : "tsv";

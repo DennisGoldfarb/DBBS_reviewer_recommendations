@@ -913,7 +913,7 @@ fn process_directory_documents(
         total_rows: rows.len(),
         preview,
         spreadsheet: GeneratedSpreadsheet {
-            filename: "directory_matches.tsv".into(),
+            filename: default_directory_spreadsheet_name(),
             mime_type: "text/tab-separated-values".into(),
             content: tsv_content,
         },
@@ -924,6 +924,11 @@ fn process_directory_documents(
         prompt_matches,
         results,
     })
+}
+
+fn default_directory_spreadsheet_name() -> String {
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    format!("DBBS_matches_{timestamp}.tsv")
 }
 
 fn format_similarity_percent(value: f32) -> String {
