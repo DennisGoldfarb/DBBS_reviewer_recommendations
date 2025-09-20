@@ -276,6 +276,7 @@ function App() {
     string | null
   >(null);
   const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
+  const areControlsDisabled = isSubmitting || isUpdatingEmbeddings;
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -1584,7 +1585,10 @@ function App() {
                 type="button"
                 onClick={handleDatasetReplacement}
                 disabled={
-                  isDatasetBusy || isDatasetLoading || isDatasetConfigurationOpen
+                  areControlsDisabled ||
+                  isDatasetBusy ||
+                  isDatasetLoading ||
+                  isDatasetConfigurationOpen
                 }
               >
                 Replace dataset
@@ -1594,7 +1598,10 @@ function App() {
                 className="secondary"
                 onClick={handleDatasetRestore}
                 disabled={
-                  isDatasetBusy || isDatasetLoading || isDatasetConfigurationOpen
+                  areControlsDisabled ||
+                  isDatasetBusy ||
+                  isDatasetLoading ||
+                  isDatasetConfigurationOpen
                 }
               >
                 Restore default
@@ -1630,7 +1637,7 @@ function App() {
           )}
 
           <div className="button-row">
-            <button type="submit" disabled={isSubmitting}>
+            <button type="submit" disabled={areControlsDisabled}>
               {isSubmitting ? "Matching…" : "Run matching"}
             </button>
             <button
@@ -1638,7 +1645,7 @@ function App() {
               className="secondary"
               onClick={handleEmbeddingsUpdate}
               disabled={
-                isUpdatingEmbeddings ||
+                areControlsDisabled ||
                 isDatasetLoading ||
                 !datasetStatus?.isValid
               }
