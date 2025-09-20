@@ -26,4 +26,7 @@ serde_json = "1"
 csv = "1"
 calamine = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+pdf-extract = "0.9"
+dotext = { package = "dotext_ed8fc7b", version = "0.1.2" }
+rtf-parser = "0.4"
 

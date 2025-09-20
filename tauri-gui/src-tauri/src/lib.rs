@@ -1,8 +1,11 @@
 use calamine::{open_workbook_auto, DataType, Reader};
 use chrono::{DateTime, Utc};
+use dotext::{Docx, MsDoc};
+use rtf_parser::document::RtfDocument;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -214,6 +217,7 @@ fn perform_matching_request(
     let mut selected_prompt_columns = Vec::new();
     let mut selected_identifier_columns = Vec::new();
     let mut prepared_prompt_text: Option<String> = None;
+    let mut display_prompt_text: Option<String> = None;
 
     match task_type {
         TaskType::Prompt => {
@@ -223,6 +227,7 @@ fn perform_matching_request(
             }
             prompt_preview = Some(build_prompt_preview(text));
             prepared_prompt_text = Some(text.to_string());
+            display_prompt_text = Some(text.to_string());
         }
         TaskType::Document => {
             let document = resolve_existing_path(document_path, false, "Single document")?;
@@ -231,6 +236,10 @@ fn perform_matching_request(
             {
                 warnings.push(message);
             }
+            let extracted_text = extract_document_text(&document)?;
+            prompt_preview = Some(build_prompt_preview(&extracted_text));
+            display_prompt_text = prompt_preview.clone();
+            prepared_prompt_text = Some(extracted_text);
             validated_paths.push(PathConfirmation::new("Document", &document));
         }
         TaskType::Spreadsheet => {
@@ -327,27 +336,34 @@ fn perform_matching_request(
     );
 
     let mut prompt_matches = Vec::new();
-    if let (TaskType::Prompt, Some(prompt)) = (&task_type, prepared_prompt_text) {
-        let embedding_index = load_faculty_embedding_index(&app_handle)?;
-        if embedding_index.entries.is_empty() {
-            return Err(
-                "No faculty embeddings are available. Generate embeddings before matching.".into(),
+    if matches!(task_type, TaskType::Prompt | TaskType::Document) {
+        if let Some(prompt) = prepared_prompt_text.as_ref() {
+            let embedding_index = load_faculty_embedding_index(&app_handle)?;
+            if embedding_index.entries.is_empty() {
+                return Err(
+                    "No faculty embeddings are available. Generate embeddings before matching."
+                        .into(),
+                );
+            }
+
+            let limit = faculty_recs_per_student.max(1) as usize;
+            let prompt_embedding = embed_prompt(&app_handle, &embedding_index, prompt)?;
+            let matches = find_best_faculty_matches(
+                &embedding_index,
+                &prompt_embedding,
+                limit,
+                allowed_faculty_rows.as_ref(),
             );
+
+            let prompt_label = display_prompt_text
+                .clone()
+                .unwrap_or_else(|| build_prompt_preview(prompt));
+
+            prompt_matches.push(PromptMatchResult {
+                prompt: prompt_label,
+                faculty_matches: matches,
+            });
         }
-
-        let limit = faculty_recs_per_student.max(1) as usize;
-        let prompt_embedding = embed_prompt(&app_handle, &embedding_index, &prompt)?;
-        let matches = find_best_faculty_matches(
-            &embedding_index,
-            &prompt_embedding,
-            limit,
-            allowed_faculty_rows.as_ref(),
-        );
-
-        prompt_matches.push(PromptMatchResult {
-            prompt,
-            faculty_matches: matches,
-        });
     }
 
     Ok(SubmissionResponse {
@@ -2492,6 +2508,140 @@ fn validate_extension(path: &Path, allowed: &[&str], label: &str) -> Option<Stri
             "The selected {label} does not include an extension. Confirm it is supported."
         )),
     }
+}
+
+fn extract_document_text(path: &Path) -> Result<String, String> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|value| value.to_ascii_lowercase());
+
+    let text = match extension.as_deref() {
+        Some("pdf") => extract_pdf_text(path)?,
+        Some("docx") => extract_docx_text(path)?,
+        Some("doc") => extract_legacy_doc_text(path)?,
+        _ => extract_plain_text(path)?,
+    };
+
+    if text.trim().is_empty() {
+        Err("The selected document does not include readable text to embed.".into())
+    } else {
+        Ok(text)
+    }
+}
+
+fn extract_pdf_text(path: &Path) -> Result<String, String> {
+    let raw = pdf_extract::extract_text(path)
+        .map_err(|err| format!("Unable to extract text from the PDF document: {err}"))?;
+    Ok(finalize_extracted_text(&raw))
+}
+
+fn extract_docx_text(path: &Path) -> Result<String, String> {
+    let mut reader =
+        Docx::open(path).map_err(|err| format!("Unable to open the Word document: {err}"))?;
+    let mut buffer = String::new();
+    reader
+        .read_to_string(&mut buffer)
+        .map_err(|err| format!("Unable to read the Word document: {err}"))?;
+    Ok(finalize_extracted_text(&buffer))
+}
+
+fn extract_plain_text(path: &Path) -> Result<String, String> {
+    let data = fs::read(path).map_err(|err| format!("Unable to read the document: {err}"))?;
+    let text = String::from_utf8_lossy(&data);
+    Ok(finalize_extracted_text(&text))
+}
+
+fn extract_legacy_doc_text(path: &Path) -> Result<String, String> {
+    if let Ok(text) = extract_docx_text(path) {
+        if !text.trim().is_empty() {
+            return Ok(text);
+        }
+    }
+
+    let data = fs::read(path).map_err(|err| format!("Unable to read the document: {err}"))?;
+    if data.starts_with(b"{\\rtf") {
+        return extract_rtf_text(&data);
+    }
+
+    if let Some(text) = decode_binary_doc_text(&data) {
+        return Ok(text);
+    }
+
+    Err("Unable to extract readable text from the Word document. Convert it to .docx or a text-based format and try again.".into())
+}
+
+fn extract_rtf_text(data: &[u8]) -> Result<String, String> {
+    let content = String::from_utf8_lossy(data);
+    let document = RtfDocument::try_from(content.as_ref())
+        .map_err(|err| format!("Unable to parse the RTF document: {err}"))?;
+    let text = document.get_text();
+    Ok(finalize_extracted_text(&text))
+}
+
+fn decode_binary_doc_text(data: &[u8]) -> Option<String> {
+    let ascii_candidate = finalize_extracted_text(&String::from_utf8_lossy(data));
+
+    let utf16_candidate = if data.len() >= 2 {
+        let mut units = Vec::with_capacity(data.len() / 2);
+        for chunk in data.chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let decoded = String::from_utf16_lossy(&units);
+        finalize_extracted_text(&decoded)
+    } else {
+        String::new()
+    };
+
+    let mut candidates = Vec::new();
+    if !ascii_candidate.trim().is_empty() {
+        candidates.push(ascii_candidate);
+    }
+    if !utf16_candidate.trim().is_empty() {
+        candidates.push(utf16_candidate);
+    }
+
+    candidates
+        .into_iter()
+        .max_by_key(|candidate| text_quality_score(candidate))
+}
+
+fn text_quality_score(text: &str) -> usize {
+    let letters = text.chars().filter(|ch| ch.is_alphanumeric()).count();
+    let whitespace = text.chars().filter(|ch| ch.is_whitespace()).count();
+    letters.saturating_mul(2) + whitespace
+}
+
+fn finalize_extracted_text(input: &str) -> String {
+    let normalized = input.replace('\r', "\n").replace('\u{0000}', "");
+    let mut lines = Vec::new();
+    let mut blank_streak = 0usize;
+
+    for line in normalized.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            blank_streak += 1;
+            if blank_streak > 1 {
+                continue;
+            }
+            lines.push(String::new());
+        } else {
+            blank_streak = 0;
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    let mut result = if lines.is_empty() {
+        normalized.trim().to_string()
+    } else {
+        lines.join("\n").trim().to_string()
+    };
+
+    if result.trim().is_empty() {
+        result.clear();
+    }
+
+    result
 }
 
 fn build_prompt_preview(text: &str) -> String {

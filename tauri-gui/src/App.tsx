@@ -1,4 +1,11 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  DragEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -97,6 +104,15 @@ interface EmbeddingProgressPayload {
 }
 
 const THEME_STORAGE_KEY = "washu-theme";
+
+const documentUploadDebug = (...messages: unknown[]) => {
+  try {
+    // eslint-disable-next-line no-console
+    console.info("[document-upload]", ...messages);
+  } catch {
+    /* ignore logging errors */
+  }
+};
 
 const getStoredThemePreference = (): ThemePreference => {
   if (typeof window === "undefined") {
@@ -201,6 +217,8 @@ function App() {
   const [taskType, setTaskType] = useState<TaskType>("prompt");
   const [promptText, setPromptText] = useState("");
   const [documentPath, setDocumentPath] = useState("");
+  const [isDocumentDragActive, setIsDocumentDragActive] = useState(false);
+  const documentDropZoneHoverRef = useRef(false);
   const [spreadsheetPath, setSpreadsheetPath] = useState("");
   const [directoryPath, setDirectoryPath] = useState("");
   const [facultyScope, setFacultyScope] = useState<FacultyScope>("all");
@@ -677,6 +695,381 @@ function App() {
     }
   };
 
+  const SUPPORTED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "txt"] as const;
+
+  const normalizeDroppedDocumentPath = useCallback(
+    (raw: string | null | undefined) => {
+      if (!raw) {
+        documentUploadDebug("normalizeDroppedDocumentPath", "no value provided");
+        return null;
+      }
+
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        documentUploadDebug(
+          "normalizeDroppedDocumentPath",
+          "value was only whitespace",
+        );
+        return null;
+      }
+
+      const decode = (value: string) => {
+        try {
+          return decodeURIComponent(value);
+        } catch {
+          documentUploadDebug(
+            "normalizeDroppedDocumentPath",
+            "unable to decode URI component",
+            value,
+          );
+          return value;
+        }
+      };
+
+      if (/^file:\/\//i.test(trimmed)) {
+        try {
+          const url = new URL(trimmed);
+          const host = url.host ? decode(url.host) : "";
+          let path = decode(url.pathname ?? "");
+          if (host) {
+            path = `//${host}${path}`;
+          }
+          if (/^\/[A-Za-z]:/.test(path)) {
+            path = path.slice(1);
+          }
+          if (path.length > 0) {
+            documentUploadDebug(
+              "normalizeDroppedDocumentPath",
+              "decoded file URI",
+              path,
+            );
+            return path;
+          }
+          documentUploadDebug(
+            "normalizeDroppedDocumentPath",
+            "file URI missing path",
+            trimmed,
+          );
+          return null;
+        } catch {
+          const withoutScheme = trimmed.replace(/^file:\/\//i, "");
+          const decoded = decode(withoutScheme);
+          if (decoded.length > 0) {
+            documentUploadDebug(
+              "normalizeDroppedDocumentPath",
+              "fallback decoded file URI",
+              decoded,
+            );
+            return decoded;
+          }
+          documentUploadDebug(
+            "normalizeDroppedDocumentPath",
+            "file URI fallback missing path",
+            trimmed,
+          );
+          return null;
+        }
+      }
+
+      const decoded = decode(trimmed);
+      if (decoded.length > 0) {
+        documentUploadDebug(
+          "normalizeDroppedDocumentPath",
+          "decoded plain path",
+          decoded,
+        );
+        return decoded;
+      }
+
+      documentUploadDebug(
+        "normalizeDroppedDocumentPath",
+        "decoded path was empty",
+        trimmed,
+      );
+      return null;
+    },
+    [],
+  );
+
+  const extractDocumentPathFromDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>): string | null => {
+      const transfer = event.dataTransfer;
+      if (!transfer) {
+        documentUploadDebug("extractDocumentPathFromDrop", "missing dataTransfer");
+        return null;
+      }
+
+      const files = transfer.files;
+      if (files && files.length > 0) {
+        const file = files[0] as File & { path?: string };
+        if (file.path) {
+          const normalized = normalizeDroppedDocumentPath(file.path);
+          if (normalized) {
+            documentUploadDebug(
+              "extractDocumentPathFromDrop",
+              "using File.path",
+              normalized,
+            );
+            return normalized;
+          }
+        }
+        documentUploadDebug(
+          "extractDocumentPathFromDrop",
+          "file entry missing usable path",
+          {
+            name: file?.name,
+            hasPath: Boolean(file?.path),
+            type: file?.type,
+          },
+        );
+      }
+
+      const gatherCandidates = (value: string, skipComments = false) => {
+        if (!value) {
+          return [] as string[];
+        }
+        return value
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(
+            (line) => line.length > 0 && (!skipComments || !line.startsWith("#")),
+          );
+      };
+
+      const safeGetData = (type: string) => {
+        try {
+          return transfer.getData(type);
+        } catch {
+          return "";
+        }
+      };
+
+      const uriCandidates = gatherCandidates(safeGetData("text/uri-list"), true);
+      for (const candidate of uriCandidates) {
+        const normalized = normalizeDroppedDocumentPath(candidate);
+        if (normalized) {
+          documentUploadDebug(
+            "extractDocumentPathFromDrop",
+            "using text/uri-list candidate",
+            normalized,
+          );
+          return normalized;
+        }
+      }
+
+      const plainCandidates = gatherCandidates(safeGetData("text/plain"));
+      for (const candidate of plainCandidates) {
+        const normalized = normalizeDroppedDocumentPath(candidate);
+        if (normalized) {
+          documentUploadDebug(
+            "extractDocumentPathFromDrop",
+            "using text/plain candidate",
+            normalized,
+          );
+          return normalized;
+        }
+      }
+
+      documentUploadDebug("extractDocumentPathFromDrop", "no usable candidates found");
+      return null;
+    },
+    [normalizeDroppedDocumentPath],
+  );
+
+  const isSupportedDocumentPath = useCallback((value: string) => {
+    const lower = value.toLowerCase();
+    const supported = SUPPORTED_DOCUMENT_EXTENSIONS.some((extension) =>
+      lower.endsWith(`.${extension}`),
+    );
+    documentUploadDebug(
+      "isSupportedDocumentPath",
+      supported ? "supported" : "unsupported",
+      lower,
+    );
+    return supported;
+  }, []);
+
+  const handleDocumentPathChange = useCallback((value: string) => {
+    setDocumentPath(value);
+    setError(null);
+    setResult(null);
+  }, []);
+
+  const acceptDroppedDocumentPath = useCallback(
+    (rawPath: string | null | undefined, options?: { silent?: boolean }) => {
+      const normalized = normalizeDroppedDocumentPath(rawPath);
+      if (!normalized) {
+        if (!options?.silent) {
+          setError(
+            "Unable to access the dropped file path. Use the Browse button to select the document instead.",
+          );
+        }
+        documentUploadDebug(
+          "acceptDroppedDocumentPath",
+          "rejected path",
+          rawPath,
+        );
+        return false;
+      }
+
+      if (!isSupportedDocumentPath(normalized)) {
+        if (!options?.silent) {
+          setError(
+            "The dropped file is not a supported format. Choose a PDF, Word document, or plain text file.",
+          );
+        }
+        documentUploadDebug(
+          "acceptDroppedDocumentPath",
+          "unsupported extension",
+          normalized,
+        );
+        return false;
+      }
+
+      handleDocumentPathChange(normalized);
+      documentUploadDebug(
+        "acceptDroppedDocumentPath",
+        "accepted path",
+        normalized,
+      );
+      return true;
+    },
+    [
+      handleDocumentPathChange,
+      isSupportedDocumentPath,
+      normalizeDroppedDocumentPath,
+    ],
+  );
+
+  const handleDocumentDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    documentDropZoneHoverRef.current = true;
+    setIsDocumentDragActive(true);
+    documentUploadDebug("handleDocumentDragEnter");
+  };
+
+  const handleDocumentDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    documentDropZoneHoverRef.current = true;
+    setIsDocumentDragActive(true);
+    documentUploadDebug("handleDocumentDragOver");
+  };
+
+  const handleDocumentDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      documentDropZoneHoverRef.current = false;
+      setIsDocumentDragActive(false);
+      documentUploadDebug("handleDocumentDragLeave");
+    }
+  };
+
+  const handleDocumentDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    documentDropZoneHoverRef.current = false;
+    setIsDocumentDragActive(false);
+    documentUploadDebug("handleDocumentDrop", {
+      hasFiles: event.dataTransfer?.files?.length ?? 0,
+      types: event.dataTransfer ? Array.from(event.dataTransfer.types ?? []) : [],
+    });
+
+    const droppedPath = extractDocumentPathFromDrop(event);
+    acceptDroppedDocumentPath(droppedPath, { silent: true });
+  };
+
+  useEffect(() => {
+    let isActive = true;
+    const unlistenCallbacks: UnlistenFn[] = [];
+
+    const extractPathsFromPayload = (payload: unknown): string[] => {
+      if (Array.isArray(payload)) {
+        return payload.filter((value): value is string => typeof value === "string");
+      }
+
+      if (payload && typeof payload === "object") {
+        const possible = (payload as { paths?: unknown }).paths;
+        if (Array.isArray(possible)) {
+          return possible.filter(
+            (value): value is string => typeof value === "string",
+          );
+        }
+      }
+
+      return [];
+    };
+
+    const registerListeners = async () => {
+      try {
+        const unlistenDrop = await listen("tauri://file-drop", (event) => {
+          if (!documentDropZoneHoverRef.current) {
+            documentUploadDebug(
+              "tauri://file-drop ignored",
+              "drop zone not active",
+              event.payload,
+            );
+            return;
+          }
+
+          documentDropZoneHoverRef.current = false;
+          if (isActive) {
+            setIsDocumentDragActive(false);
+          }
+
+          const [firstPath] = extractPathsFromPayload(event.payload);
+          if (!firstPath) {
+            acceptDroppedDocumentPath(null);
+            return;
+          }
+
+          documentUploadDebug("tauri://file-drop", firstPath);
+          acceptDroppedDocumentPath(firstPath);
+        });
+        unlistenCallbacks.push(unlistenDrop);
+      } catch {
+        /* ignore file-drop registration errors */
+      }
+
+      try {
+        const unlistenCancel = await listen("tauri://file-drop-cancelled", () => {
+          if (!documentDropZoneHoverRef.current) {
+            return;
+          }
+
+          documentDropZoneHoverRef.current = false;
+          if (isActive) {
+            setIsDocumentDragActive(false);
+          }
+          documentUploadDebug("tauri://file-drop-cancelled");
+        });
+        unlistenCallbacks.push(unlistenCancel);
+      } catch {
+        /* ignore cancellation registration errors */
+      }
+    };
+
+    void registerListeners();
+
+    return () => {
+      isActive = false;
+      while (unlistenCallbacks.length > 0) {
+        const unlisten = unlistenCallbacks.pop();
+        if (unlisten) {
+          try {
+            unlisten();
+          } catch {
+            /* ignore cleanup errors */
+          }
+        }
+      }
+    };
+  }, [acceptDroppedDocumentPath]);
+
   const handleSpreadsheetPathInput = (value: string) => {
     setSpreadsheetPath(value);
     setError(null);
@@ -1041,7 +1434,7 @@ function App() {
                     type="button"
                     className="secondary"
                     onClick={() =>
-                      handleFileSelection(setDocumentPath, {
+                      handleFileSelection(handleDocumentPathChange, {
                         multiple: false,
                         filters: [
                           {
@@ -1057,9 +1450,27 @@ function App() {
                   <input
                     type="text"
                     value={documentPath}
-                    onChange={(event) => setDocumentPath(event.target.value)}
+                    onChange={(event) =>
+                      handleDocumentPathChange(event.target.value)
+                    }
                     placeholder="Paste or confirm the document path"
                   />
+                </div>
+                <div
+                  className={`document-drop-zone${
+                    isDocumentDragActive ? " drag-active" : ""
+                  }`}
+                  onDragEnter={handleDocumentDragEnter}
+                  onDragOver={handleDocumentDragOver}
+                  onDragLeave={handleDocumentDragLeave}
+                  onDrop={handleDocumentDrop}
+                >
+                  <span className="drop-zone-primary">
+                    Drag and drop a PDF, Word document, or text file here
+                  </span>
+                  <span className="drop-zone-secondary">
+                    or use the Browse button to choose a file
+                  </span>
                 </div>
                 {documentPath && (
                   <div className="path-preview">{documentPath}</div>
