@@ -70,6 +70,10 @@ struct SubmissionPayload {
     spreadsheet_prompt_columns: Vec<String>,
     #[serde(default)]
     spreadsheet_identifier_columns: Vec<String>,
+    #[serde(default)]
+    faculty_roster_column_map: HashMap<String, String>,
+    #[serde(default)]
+    faculty_roster_warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -100,6 +104,8 @@ struct SubmissionDetails {
     prompt_preview: Option<String>,
     spreadsheet_prompt_columns: Vec<String>,
     spreadsheet_identifier_columns: Vec<String>,
+    faculty_roster_column_map: HashMap<String, String>,
+    faculty_roster_warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,6 +137,14 @@ struct FacultyDatasetPreviewResponse {
     suggested_embedding_columns: Vec<usize>,
     suggested_identifier_columns: Vec<usize>,
     suggested_program_columns: Vec<usize>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FacultyRosterPreviewResponse {
+    preview: SpreadsheetPreview,
+    suggested_identifier_matches: HashMap<String, Option<usize>>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -211,13 +225,15 @@ fn perform_matching_request(
         faculty_recs_per_student,
         spreadsheet_prompt_columns,
         spreadsheet_identifier_columns,
+        faculty_roster_column_map,
+        faculty_roster_warnings,
     } = payload;
 
     if faculty_recs_per_student == 0 {
         return Err("Specify at least one faculty recommendation per student.".into());
     }
 
-    let mut warnings = Vec::new();
+    let mut warnings = faculty_roster_warnings.clone();
     let mut validated_paths = Vec::new();
     let mut prompt_preview = None;
     let mut selected_prompt_columns = Vec::new();
@@ -226,6 +242,8 @@ fn perform_matching_request(
     let mut prepared_prompt_text: Option<String> = None;
     let mut directory_source: Option<PathBuf> = None;
     let mut spreadsheet_source: Option<PathBuf> = None;
+    let mut detail_roster_column_map: HashMap<String, String> = HashMap::new();
+    let mut roster_warning_messages = faculty_roster_warnings;
 
     match task_type {
         TaskType::Prompt => {
@@ -301,6 +319,196 @@ fn perform_matching_request(
         }
         faculty_roster_path = Some(roster.to_string_lossy().into_owned());
         validated_paths.push(PathConfirmation::new("Faculty list", &roster));
+
+        let metadata = load_faculty_dataset_metadata(&app_handle)?.ok_or_else(|| {
+            "The faculty dataset metadata is unavailable. Refresh the dataset analysis before limiting faculty by roster.".to_string()
+        })?;
+
+        let mut identifier_lookup: HashMap<String, String> = HashMap::new();
+        for identifier in &metadata.analysis.identifier_columns {
+            identifier_lookup.insert(identifier.trim().to_lowercase(), identifier.clone());
+        }
+
+        let mut resolved_map: HashMap<String, String> = HashMap::new();
+        for (raw_identifier, roster_label) in faculty_roster_column_map.iter() {
+            let normalized_identifier = raw_identifier.trim().to_lowercase();
+            if normalized_identifier.is_empty() {
+                continue;
+            }
+
+            let trimmed_label = roster_label.trim();
+            if trimmed_label.is_empty() {
+                continue;
+            }
+
+            if let Some(original_identifier) = identifier_lookup.get(&normalized_identifier) {
+                resolved_map
+                    .entry(original_identifier.clone())
+                    .or_insert_with(|| trimmed_label.to_string());
+            } else {
+                let message = format!(
+                    "The roster mapping includes an unknown identifier '{raw_identifier}'.",
+                );
+                warnings.push(message.clone());
+                roster_warning_messages.push(message);
+            }
+        }
+
+        if resolved_map.is_empty() {
+            return Err("Map at least one roster column to a faculty identifier.".into());
+        }
+
+        let (mut headers, mut rows) = read_full_spreadsheet(&roster)?;
+        align_row_lengths(&mut headers, &mut rows);
+
+        detail_roster_column_map = resolved_map.clone();
+
+        let header_map = build_header_index_map(&headers);
+        let mut roster_column_indexes: HashMap<String, usize> = HashMap::new();
+
+        for (identifier, roster_label) in resolved_map.iter() {
+            let normalized_label = roster_label.trim().to_lowercase();
+            let mut column_index = header_map.get(&normalized_label).copied();
+
+            if column_index.is_none() {
+                let normalized_target = normalize_identifier_label(roster_label);
+                if !normalized_target.is_empty() {
+                    for (candidate_index, header) in headers.iter().enumerate() {
+                        if normalize_identifier_label(header) == normalized_target {
+                            column_index = Some(candidate_index);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if let Some(found_index) = column_index {
+                roster_column_indexes.insert(identifier.clone(), found_index);
+            } else {
+                let message = format!(
+                    "The roster does not contain a column named '{roster_label}' for identifier '{identifier}'.",
+                );
+                warnings.push(message.clone());
+                roster_warning_messages.push(message);
+            }
+        }
+
+        if roster_column_indexes.is_empty() {
+            return Err(
+                "None of the mapped roster columns were found in the roster spreadsheet.".into(),
+            );
+        }
+
+        let identifier_order: Vec<String> = metadata
+            .analysis
+            .identifier_columns
+            .iter()
+            .filter(|identifier| roster_column_indexes.contains_key(*identifier))
+            .cloned()
+            .collect();
+
+        if identifier_order.is_empty() {
+            return Err("Map at least one roster column to a faculty identifier.".into());
+        }
+
+        let mut dataset_index: HashMap<String, HashSet<usize>> = HashMap::new();
+        for membership in &metadata.memberships {
+            let mut parts = Vec::new();
+            for identifier in &identifier_order {
+                if let Some(value) = membership.identifiers.get(identifier) {
+                    let normalized = normalize_identifier_value(value);
+                    if normalized.is_empty() {
+                        parts.clear();
+                        break;
+                    }
+                    parts.push(normalized);
+                } else {
+                    parts.clear();
+                    break;
+                }
+            }
+
+            if parts.is_empty() {
+                continue;
+            }
+
+            let key = parts.join("|");
+            dataset_index
+                .entry(key)
+                .or_default()
+                .insert(membership.row_index);
+        }
+
+        if dataset_index.is_empty() {
+            let message =
+                "No faculty dataset identifiers were available for the selected roster columns."
+                    .to_string();
+            warnings.push(message.clone());
+            roster_warning_messages.push(message);
+        }
+
+        let mut matched_rows: HashSet<usize> = HashSet::new();
+        let mut unmatched_roster_rows = 0usize;
+
+        for row in &rows {
+            let mut parts = Vec::new();
+            let mut row_missing = false;
+
+            for identifier in &identifier_order {
+                let column_index = match roster_column_indexes.get(identifier) {
+                    Some(index) => *index,
+                    None => {
+                        row_missing = true;
+                        break;
+                    }
+                };
+
+                let value = row
+                    .get(column_index)
+                    .map(|value| normalize_identifier_value(value));
+                match value {
+                    Some(normalized) if !normalized.is_empty() => parts.push(normalized),
+                    _ => {
+                        row_missing = true;
+                        break;
+                    }
+                }
+            }
+
+            if row_missing || parts.is_empty() {
+                unmatched_roster_rows += 1;
+                continue;
+            }
+
+            let key = parts.join("|");
+            if let Some(rows) = dataset_index.get(&key) {
+                matched_rows.extend(rows.iter().copied());
+            } else {
+                unmatched_roster_rows += 1;
+            }
+        }
+
+        if unmatched_roster_rows > 0 {
+            let message = format!(
+                "{unmatched_roster_rows} roster row{plural} did not match any faculty dataset entries.",
+                plural = if unmatched_roster_rows == 1 { "" } else { "s" }
+            );
+            warnings.push(message.clone());
+            roster_warning_messages.push(message);
+        }
+
+        if matched_rows.is_empty() {
+            let message =
+                "No faculty in the dataset matched the provided roster identifiers.".to_string();
+            warnings.push(message.clone());
+            roster_warning_messages.push(message);
+        }
+
+        for (identifier, &index) in &roster_column_indexes {
+            detail_roster_column_map.insert(identifier.clone(), header_label(&headers, index));
+        }
+
+        allowed_faculty_rows = Some(matched_rows);
     }
 
     if matches!(faculty_scope, FacultyScope::Program) && normalized_programs.is_empty() {
@@ -338,6 +546,8 @@ fn perform_matching_request(
         prompt_preview,
         spreadsheet_prompt_columns: selected_prompt_columns.clone(),
         spreadsheet_identifier_columns: detail_identifier_columns.clone(),
+        faculty_roster_column_map: detail_roster_column_map.clone(),
+        faculty_roster_warnings: roster_warning_messages.clone(),
     };
 
     let summary = build_summary(
@@ -2511,6 +2721,73 @@ fn get_faculty_dataset_status(
 }
 
 #[tauri::command]
+fn preview_faculty_roster(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<FacultyRosterPreviewResponse, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Provide a TSV, TXT, or Excel file to analyze for the faculty roster.".into());
+    }
+
+    let source = resolve_existing_path(Some(trimmed.to_string()), false, "Faculty roster file")?;
+    let (mut headers, mut rows) = read_spreadsheet_with_limit(&source, Some(10))?;
+    align_row_lengths(&mut headers, &mut rows);
+
+    let metadata = load_faculty_dataset_metadata(&app_handle)?.ok_or_else(|| {
+        "The faculty dataset metadata is unavailable. Refresh the dataset analysis before selecting a roster.".to_string()
+    })?;
+
+    let mut warnings = Vec::new();
+    let mut suggestions: HashMap<String, Option<usize>> = HashMap::new();
+
+    if metadata.analysis.identifier_columns.is_empty() {
+        warnings.push("No identifier columns are defined in the active faculty dataset.".into());
+    }
+
+    let header_map = build_header_index_map(&headers);
+
+    for identifier in &metadata.analysis.identifier_columns {
+        let normalized_identifier = identifier.trim().to_lowercase();
+        let mut column_index = header_map.get(&normalized_identifier).copied();
+
+        if column_index.is_none() {
+            let normalized_target = normalize_identifier_label(identifier);
+            if !normalized_target.is_empty() {
+                for (candidate_index, header) in headers.iter().enumerate() {
+                    if normalize_identifier_label(header) == normalized_target {
+                        column_index = Some(candidate_index);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(index) = column_index {
+            suggestions.insert(identifier.clone(), Some(index));
+        } else {
+            warnings.push(format!(
+                "No roster column matched the faculty identifier '{identifier}'.",
+            ));
+            suggestions.insert(identifier.clone(), None);
+        }
+    }
+
+    let preview = SpreadsheetPreview {
+        headers,
+        rows,
+        suggested_prompt_columns: Vec::new(),
+        suggested_identifier_columns: Vec::new(),
+    };
+
+    Ok(FacultyRosterPreviewResponse {
+        preview,
+        suggested_identifier_matches: suggestions,
+        warnings,
+    })
+}
+
+#[tauri::command]
 fn preview_faculty_dataset_replacement(
     path: String,
 ) -> Result<FacultyDatasetPreviewResponse, String> {
@@ -2608,6 +2885,11 @@ fn restore_default_faculty_dataset(
     fs::write(&destination, DEFAULT_FACULTY_DATASET)
         .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
 
+    let embeddings_path = dataset_directory(&app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
+    ensure_dataset_directory(&embeddings_path)?;
+    fs::write(&embeddings_path, DEFAULT_FACULTY_EMBEDDINGS)
+        .map_err(|err| format!("Unable to restore the default faculty embeddings: {err}"))?;
+
     let _ = clear_faculty_dataset_source_path(&app_handle);
 
     let mut status = build_faculty_dataset_status(&app_handle)?;
@@ -2700,6 +2982,23 @@ fn normalize_columns(columns: Vec<String>) -> Vec<String> {
     }
 
     cleaned
+}
+
+fn normalize_identifier_value(value: &str) -> String {
+    value
+        .split_whitespace()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn normalize_identifier_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
 }
 
 fn read_spreadsheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
@@ -3836,6 +4135,7 @@ pub fn run() {
             update_faculty_embeddings,
             analyze_spreadsheet,
             get_faculty_dataset_status,
+            preview_faculty_roster,
             preview_faculty_dataset_replacement,
             replace_faculty_dataset,
             restore_default_faculty_dataset,

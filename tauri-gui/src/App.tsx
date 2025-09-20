@@ -60,6 +60,12 @@ interface FacultyDatasetPreviewResult {
   suggestedProgramColumns: number[];
 }
 
+interface FacultyRosterPreviewResult {
+  preview: SpreadsheetPreview;
+  suggestedIdentifierMatches: Record<string, number | null>;
+  warnings: string[];
+}
+
 interface FacultyDatasetStatus {
   path: string | null;
   canonicalPath: string | null;
@@ -85,6 +91,8 @@ interface SubmissionDetails {
   promptPreview?: string;
   spreadsheetPromptColumns: string[];
   spreadsheetIdentifierColumns: string[];
+  facultyRosterColumnMap: Record<string, string>;
+  facultyRosterWarnings: string[];
 }
 
 interface FacultyMatchResult {
@@ -252,6 +260,17 @@ function App() {
   const [customFacultyPath, setCustomFacultyPath] = useState("");
   const [facultyRecCount, setFacultyRecCount] = useState("10");
 
+  const [rosterPreview, setRosterPreview] =
+    useState<SpreadsheetPreview | null>(null);
+  const [rosterPreviewError, setRosterPreviewError] = useState<string | null>(
+    null,
+  );
+  const [isLoadingRosterPreview, setIsLoadingRosterPreview] = useState(false);
+  const [rosterIdentifierMapping, setRosterIdentifierMapping] = useState<
+    Record<string, number | null>
+  >({});
+  const [rosterWarnings, setRosterWarnings] = useState<string[]>([]);
+
   const [spreadsheetPreview, setSpreadsheetPreview] =
     useState<SpreadsheetPreview | null>(null);
   const [spreadsheetPreviewError, setSpreadsheetPreviewError] =
@@ -327,6 +346,14 @@ function App() {
     theme === "light"
       ? "Switch to dark WashU theme"
       : "Switch to light WashU theme";
+
+  const resetRosterConfiguration = useCallback(() => {
+    setRosterPreview(null);
+    setRosterPreviewError(null);
+    setIsLoadingRosterPreview(false);
+    setRosterIdentifierMapping({});
+    setRosterWarnings([]);
+  }, []);
 
   const applyDatasetStatus = useCallback(
     (
@@ -612,6 +639,9 @@ function App() {
         "restore_default_faculty_dataset",
       );
       applyDatasetStatus(status, "success");
+      if (status.isValid) {
+        await runEmbeddingRefresh(status);
+      }
     } catch (restoreError) {
       const message =
         restoreError instanceof Error
@@ -676,6 +706,7 @@ function App() {
 
     if (value !== "custom") {
       setCustomFacultyPath("");
+      resetRosterConfiguration();
     }
 
     if (value !== "program") {
@@ -720,11 +751,71 @@ function App() {
     }
   };
 
+  const handleRosterPathInput = (value: string) => {
+    setCustomFacultyPath(value);
+    setError(null);
+    setResult(null);
+    resetRosterConfiguration();
+  };
+
   const handleSpreadsheetPathInput = (value: string) => {
     setSpreadsheetPath(value);
     setError(null);
     setResult(null);
     resetSpreadsheetConfiguration();
+  };
+
+  const loadRosterPreview = async (path: string) => {
+    const trimmed = path.trim();
+    if (trimmed.length === 0) {
+      resetRosterConfiguration();
+      return;
+    }
+
+    setIsLoadingRosterPreview(true);
+    setRosterPreviewError(null);
+    setError(null);
+    setResult(null);
+
+    try {
+      const response = await invoke<FacultyRosterPreviewResult>(
+        "preview_faculty_roster",
+        {
+          path: trimmed,
+        },
+      );
+
+      const mapping: Record<string, number | null> = {};
+      for (const [identifier, index] of Object.entries(
+        response.suggestedIdentifierMatches ?? {},
+      )) {
+        mapping[identifier] =
+          typeof index === "number" && Number.isInteger(index) ? index : null;
+      }
+
+      const datasetIdentifiers =
+        datasetStatus?.analysis?.identifierColumns ?? [];
+      for (const identifier of datasetIdentifiers) {
+        if (!(identifier in mapping)) {
+          mapping[identifier] = null;
+        }
+      }
+
+      setRosterPreview(response.preview);
+      setRosterWarnings(response.warnings ?? []);
+      setRosterIdentifierMapping(mapping);
+    } catch (analysisError) {
+      const message =
+        analysisError instanceof Error
+          ? analysisError.message
+          : String(analysisError);
+      setRosterPreview(null);
+      setRosterWarnings([]);
+      setRosterIdentifierMapping({});
+      setRosterPreviewError(message);
+    } finally {
+      setIsLoadingRosterPreview(false);
+    }
   };
 
   const loadSpreadsheetPreview = async (path: string) => {
@@ -768,6 +859,22 @@ function App() {
     }
   };
 
+  const handleRosterSelection = async () => {
+    const selection = await handleFileSelection(handleRosterPathInput, {
+      multiple: false,
+      filters: [
+        {
+          name: "Faculty rosters",
+          extensions: ["tsv", "txt", "xlsx", "xls"],
+        },
+      ],
+    });
+
+    if (selection) {
+      await loadRosterPreview(selection);
+    }
+  };
+
   const handleSpreadsheetSelection = async () => {
     const selection = await handleFileSelection(setSpreadsheetPath, {
       multiple: false,
@@ -782,6 +889,24 @@ function App() {
     if (selection) {
       await loadSpreadsheetPreview(selection);
     }
+  };
+
+  const handleRosterIdentifierSelection = (
+    identifier: string,
+    rawIndex: string,
+  ) => {
+    setRosterIdentifierMapping((current) => {
+      const updated: Record<string, number | null> = { ...current };
+      if (rawIndex === "") {
+        updated[identifier] = null;
+      } else {
+        const parsed = Number.parseInt(rawIndex, 10);
+        updated[identifier] = Number.isNaN(parsed) ? null : parsed;
+      }
+      return updated;
+    });
+    setError(null);
+    setResult(null);
   };
 
   const toggleIdentifierColumn = (index: number) => {
@@ -832,6 +957,45 @@ function App() {
     return unique
       .filter((index) => index < spreadsheetPreview.headers.length)
       .map((index) => getColumnLabel(index));
+  };
+
+  const getRosterColumnLabel = (index: number) => {
+    if (!rosterPreview) {
+      return `Column ${index + 1}`;
+    }
+
+    const header = rosterPreview.headers[index];
+    if (!header) {
+      return `Column ${index + 1}`;
+    }
+
+    const trimmed = header.trim();
+    return trimmed.length > 0 ? trimmed : `Column ${index + 1}`;
+  };
+
+  const mapRosterColumnSelection = (
+    mapping: Record<string, number | null>,
+  ): Record<string, string> => {
+    const entries: [string, string][] = [];
+
+    for (const [identifier, index] of Object.entries(mapping)) {
+      if (typeof index !== "number" || Number.isNaN(index)) {
+        continue;
+      }
+
+      if (!rosterPreview) {
+        entries.push([identifier, `Column ${index + 1}`]);
+        continue;
+      }
+
+      if (index < 0 || index >= rosterPreview.headers.length) {
+        continue;
+      }
+
+      entries.push([identifier, getRosterColumnLabel(index)]);
+    }
+
+    return Object.fromEntries(entries);
   };
 
   const getDatasetConfigurationColumnLabel = (index: number) => {
@@ -892,6 +1056,8 @@ function App() {
       1,
       Number.parseInt(facultyRecCount, 10) || 0,
     );
+    let rosterColumnMap: Record<string, string> = {};
+
     if (taskType === "spreadsheet") {
       const trimmedPath = spreadsheetPath.trim();
       if (trimmedPath.length === 0) {
@@ -908,6 +1074,30 @@ function App() {
 
       if (selectedPromptColumns.length === 0) {
         setError("Select at least one column containing the student prompts.");
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
+    if (facultyScope === "custom") {
+      const trimmedRosterPath = customFacultyPath.trim();
+      if (trimmedRosterPath.length === 0) {
+        setError("Provide a faculty roster spreadsheet to limit the faculty list.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!rosterPreview) {
+        setError("Load the roster preview to map faculty identifiers before submitting.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      rosterColumnMap = mapRosterColumnSelection(rosterIdentifierMapping);
+      if (Object.keys(rosterColumnMap).length === 0) {
+        setError(
+          "Select at least one roster column that corresponds to a faculty identifier.",
+        );
         setIsSubmitting(false);
         return;
       }
@@ -949,6 +1139,12 @@ function App() {
             spreadsheetIdentifierColumns:
               taskType === "spreadsheet"
                 ? mapSelectedColumns(selectedIdentifierColumns)
+                : undefined,
+            facultyRosterColumnMap:
+              facultyScope === "custom" ? rosterColumnMap : undefined,
+            facultyRosterWarnings:
+              facultyScope === "custom" && rosterWarnings.length > 0
+                ? rosterWarnings
                 : undefined,
           },
         },
@@ -1495,29 +1691,136 @@ function App() {
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() =>
-                      handleFileSelection(setCustomFacultyPath, {
-                        multiple: false,
-                        filters: [
-                          {
-                            name: "Faculty rosters",
-                            extensions: ["tsv", "txt", "xlsx", "xls"],
-                          },
-                        ],
-                      })
-                    }
+                    onClick={() => void handleRosterSelection()}
                   >
                     Browse…
                   </button>
                   <input
                     type="text"
                     value={customFacultyPath}
-                    onChange={(event) => setCustomFacultyPath(event.target.value)}
+                    onChange={(event) =>
+                      handleRosterPathInput(event.target.value)
+                    }
                     placeholder="Paste or confirm the faculty roster path"
                   />
+                  <button
+                    type="button"
+                    onClick={() => void loadRosterPreview(customFacultyPath)}
+                    disabled={
+                      customFacultyPath.trim().length === 0 ||
+                      isLoadingRosterPreview
+                    }
+                  >
+                    {isLoadingRosterPreview
+                      ? "Loading preview…"
+                      : "Load roster preview"}
+                  </button>
                 </div>
                 {customFacultyPath && (
                   <div className="path-preview">{customFacultyPath}</div>
+                )}
+                {rosterPreviewError && (
+                  <div className="preview-error">{rosterPreviewError}</div>
+                )}
+                {isLoadingRosterPreview && !rosterPreviewError && (
+                  <div className="preview-status">
+                    Analyzing the roster…
+                  </div>
+                )}
+                {rosterWarnings.length > 0 && (
+                  <ul className="warning-list">
+                    {rosterWarnings.map((warning, index) => (
+                      <li key={`roster-warning-${index}`}>{warning}</li>
+                    ))}
+                  </ul>
+                )}
+                {rosterPreview && (
+                  <div className="spreadsheet-preview-card">
+                    <div className="column-selector-group">
+                      <div className="column-selector">
+                        <h4>Roster identifier mapping</h4>
+                        <p className="small-note">
+                          Match each dataset identifier column to the
+                          corresponding column in the roster. Only matched
+                          identifiers will be used to limit the faculty list.
+                        </p>
+                        {datasetStatus?.analysis?.identifierColumns &&
+                        datasetStatus.analysis.identifierColumns.length > 0 ? (
+                          <div className="column-checkbox-list">
+                            {datasetStatus.analysis.identifierColumns.map(
+                              (identifier) => {
+                                const selected =
+                                  rosterIdentifierMapping[identifier] ?? null;
+                                return (
+                                  <label
+                                    key={`roster-identifier-${identifier}`}
+                                    className="column-checkbox-option"
+                                  >
+                                    <span>{identifier}</span>
+                                    <select
+                                      value={
+                                        selected == null
+                                          ? ""
+                                          : String(selected)
+                                      }
+                                      onChange={(event) =>
+                                        handleRosterIdentifierSelection(
+                                          identifier,
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      <option value="">No match</option>
+                                      {rosterPreview.headers.map((_, index) => (
+                                        <option
+                                          key={`roster-column-${identifier}-${index}`}
+                                          value={index}
+                                        >
+                                          {getRosterColumnLabel(index)}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                );
+                              },
+                            )}
+                          </div>
+                        ) : (
+                          <p className="small-note">
+                            No identifier columns were detected in the active
+                            faculty dataset.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="preview-table-wrapper">
+                      <table className="preview-table">
+                        <thead>
+                          <tr>
+                            {rosterPreview.headers.map((_, index) => (
+                              <th key={`roster-header-${index}`}>
+                                {getRosterColumnLabel(index)}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rosterPreview.rows.map((row, rowIndex) => (
+                            <tr key={`roster-row-${rowIndex}`}>
+                              {row.map((value, columnIndex) => (
+                                <td
+                                  key={`roster-cell-${rowIndex}-${columnIndex}`}
+                                  title={value}
+                                >
+                                  {value}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )}
                 <p className="small-note">
                   Upload a tab-delimited TSV/TXT or Excel file listing the
@@ -1808,6 +2111,39 @@ function App() {
                         <div className="path-preview">
                           {result.details.customFacultyPath}
                         </div>
+                      </dd>
+                    </>
+                  )}
+                  {Object.keys(result.details.facultyRosterColumnMap).length >
+                    0 && (
+                    <>
+                      <dt>Roster mapping</dt>
+                      <dd>
+                        <ul className="path-list">
+                          {Object.entries(
+                            result.details.facultyRosterColumnMap,
+                          ).map(([identifier, column]) => (
+                            <li key={`roster-map-${identifier}-${column}`}>
+                              <strong>{identifier}:</strong> {column}
+                            </li>
+                          ))}
+                        </ul>
+                      </dd>
+                    </>
+                  )}
+                  {result.details.facultyRosterWarnings.length > 0 && (
+                    <>
+                      <dt>Roster warnings</dt>
+                      <dd>
+                        <ul className="warning-list">
+                          {result.details.facultyRosterWarnings.map(
+                            (warning, index) => (
+                              <li key={`roster-warning-detail-${index}`}>
+                                {warning}
+                              </li>
+                            ),
+                          )}
+                        </ul>
                       </dd>
                     </>
                   )}
