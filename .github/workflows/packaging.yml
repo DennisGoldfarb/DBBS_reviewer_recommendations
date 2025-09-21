@@ -45,6 +45,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install DMG tooling (macOS)
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
+
       - name: Use short Cargo target dir (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -222,6 +226,10 @@ jobs:
         run: npm ci
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install DMG tooling (macOS)
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
 
       - name: Read app metadata
         id: metadata
