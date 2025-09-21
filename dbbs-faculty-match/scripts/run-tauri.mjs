@@ -37,11 +37,23 @@ exit 0
   }
 }
 
-const command = process.platform === "win32" ? "tauri.cmd" : "tauri";
-const child = spawn(command, args, {
+const isWindows = process.platform === "win32";
+const command = "tauri";
+const spawnOptions = {
   stdio: "inherit",
   env,
-});
+  shell: isWindows,
+};
+
+let child;
+
+try {
+  child = spawn(command, args, spawnOptions);
+} catch (error) {
+  console.error("Failed to start Tauri CLI:", error);
+  process.exitCode = 1;
+  process.exit();
+}
 
 child.on("error", (error) => {
   console.error("Failed to start Tauri CLI:", error);
