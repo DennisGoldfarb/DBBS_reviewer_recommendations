@@ -3,7 +3,7 @@ name = "dbbs-faculty-match"
 version = "0.1.0"
 description = "DBBS Faculty Match desktop application"
 authors = ["Dennis Goldfarb"]
-edition = "2025"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
