@@ -135,7 +135,7 @@ function findPythonCandidate() {
 
 function resolveRuntimePython(runtimePath) {
   const candidates = process.platform === 'win32'
-    ? [path.join(runtimePath, 'Scripts', 'python.exe'), path.join(runtimePath, 'Scripts', 'python')] 
+    ? [path.join(runtimePath, 'Scripts', 'python.exe'), path.join(runtimePath, 'Scripts', 'python')]
     : [path.join(runtimePath, 'bin', 'python3'), path.join(runtimePath, 'bin', 'python')];
 
   for (const candidate of candidates) {
@@ -147,12 +147,74 @@ function resolveRuntimePython(runtimePath) {
   return null;
 }
 
-if (!reuseExisting) {
-  ensureDirectory(pythonRootDir);
-  if (fs.existsSync(runtimeDir)) {
-    fs.rmSync(runtimeDir, { recursive: true, force: true });
+function resolveSitePackages(runtimePython) {
+  const result = spawnSync(
+    runtimePython,
+    ['-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])'],
+    {
+      stdio: ['ignore', 'pipe', 'inherit']
+    }
+  );
+
+  if (result.status !== 0) {
+    fail('Unable to resolve the site-packages directory for the bundled runtime.');
   }
 
+  const sitePackages = result.stdout?.toString().trim();
+  if (!sitePackages) {
+    fail('Bundled runtime did not report a valid site-packages directory.');
+  }
+
+  return sitePackages;
+}
+
+function pruneTorchPackage(sitePackagesDir) {
+  const torchDir = path.join(sitePackagesDir, 'torch');
+  if (!fs.existsSync(torchDir)) {
+    return;
+  }
+
+  const removals = [];
+  const dropDirs = [
+    path.join(torchDir, 'include'),
+    path.join(torchDir, 'share')
+  ];
+
+  for (const dir of dropDirs) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      removals.push(path.relative(torchDir, dir) || path.basename(dir));
+    }
+  }
+
+  const libDir = path.join(torchDir, 'lib');
+  if (fs.existsSync(libDir)) {
+    for (const entry of fs.readdirSync(libDir)) {
+      if (entry.toLowerCase().endsWith('.pdb')) {
+        fs.rmSync(path.join(libDir, entry), { force: true });
+        removals.push(path.join('lib', entry));
+      }
+    }
+  }
+
+  if (removals.length > 0) {
+    console.log(
+      `\u2139\ufe0f Removed development-only torch assets from bundled runtime: ${removals.join(', ')}.`
+    );
+  } else {
+    console.log('\u2139\ufe0f No torch development assets needed pruning from bundled runtime.');
+  }
+}
+
+ensureDirectory(pythonRootDir);
+
+if (!reuseExisting && fs.existsSync(runtimeDir)) {
+  fs.rmSync(runtimeDir, { recursive: true, force: true });
+}
+
+let runtimePython = resolveRuntimePython(runtimeDir);
+
+if (!reuseExisting) {
   const python = findPythonCandidate();
   if (!python) {
     fail(
@@ -163,8 +225,7 @@ if (!reuseExisting) {
   console.log(`\u2139\ufe0f Using ${python.command} to create bundled Python runtime at ${runtimeDir}.`);
 
   runCommand(python.command, [...python.args, '-m', 'venv', runtimeDir]);
-
-  const runtimePython = resolveRuntimePython(runtimeDir);
+  runtimePython = resolveRuntimePython(runtimeDir);
   if (!runtimePython) {
     fail(`Virtual environment creation succeeded but no interpreter was found in ${runtimeDir}.`);
   }
@@ -193,4 +254,9 @@ if (!reuseExisting) {
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   console.log(`\u2705 Bundled Python runtime prepared for ${runtimeDirName}.`);
+} else if (!runtimePython) {
+  fail(`Bundled runtime at ${runtimeDir} exists but no interpreter was found.`);
 }
+
+const sitePackagesDir = resolveSitePackages(runtimePython);
+pruneTorchPackage(sitePackagesDir);
