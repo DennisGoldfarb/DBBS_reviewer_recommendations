@@ -177,7 +177,9 @@ function pruneTorchPackage(sitePackagesDir) {
   const removals = [];
   const dropDirs = [
     path.join(torchDir, 'include'),
-    path.join(torchDir, 'share')
+    path.join(torchDir, 'share'),
+    path.join(torchDir, 'lib', 'cmake'),
+    path.join(torchDir, 'lib', 'pkgconfig')
   ];
 
   for (const dir of dropDirs) {
@@ -190,7 +192,8 @@ function pruneTorchPackage(sitePackagesDir) {
   const libDir = path.join(torchDir, 'lib');
   if (fs.existsSync(libDir)) {
     for (const entry of fs.readdirSync(libDir)) {
-      if (entry.toLowerCase().endsWith('.pdb')) {
+      const lower = entry.toLowerCase();
+      if (lower.endsWith('.pdb') || lower.endsWith('.lib') || lower.endsWith('.exp') || lower.endsWith('.ilk')) {
         fs.rmSync(path.join(libDir, entry), { force: true });
         removals.push(path.join('lib', entry));
       }
