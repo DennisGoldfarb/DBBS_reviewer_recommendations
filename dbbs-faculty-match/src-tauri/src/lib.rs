@@ -2527,11 +2527,23 @@ struct BundledPythonRuntime {
     root: PathBuf,
 }
 
+fn expected_bundled_runtime_root(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    app_handle.path().resource_dir().ok().map(|resource_dir| {
+        resource_dir.join("python").join(format!(
+            "{}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ))
+    })
+}
+
 fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
     let script = PYTHON_EMBEDDING_HELPER;
     let mut attempt_messages: Vec<String> = Vec::new();
 
-    if let Some(runtime) = locate_bundled_python_runtime(app_handle)? {
+    let bundled_runtime = locate_bundled_python_runtime(app_handle)?;
+
+    if let Some(runtime) = bundled_runtime {
         match Command::new(&runtime.executable)
             .arg("-c")
             .arg(script)
@@ -2553,6 +2565,15 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
                 ));
             }
         }
+    } else if let Some(expected_root) = expected_bundled_runtime_root(app_handle) {
+        attempt_messages.push(format!(
+            "Bundled runtime not found at {}.",
+            expected_root.display()
+        ));
+    } else {
+        attempt_messages.push(
+            "Bundled runtime path could not be determined from the application resources directory.".to_string(),
+        );
     }
 
     let candidates = ["python3", "python"];
@@ -2572,12 +2593,15 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
         {
             Ok(child) => return Ok(child),
             Err(err) => {
+                let message = if err.kind() == std::io::ErrorKind::NotFound {
+                    format!("System interpreter '{candidate}' was not found on the PATH.")
+                } else {
+                    format!("System interpreter '{candidate}': {err}.")
+                };
+                attempt_messages.push(message);
                 if err.kind() == std::io::ErrorKind::NotFound {
                     continue;
                 }
-                attempt_messages.push(format!(
-                    "System interpreter '{candidate}': {err}."
-                ));
             }
         }
     }
@@ -2585,18 +2609,20 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
     let remediation =
         "Reinstall the application to restore the bundled runtime or install Python with the 'torch' and 'transformers' packages.";
 
-    if attempt_messages.is_empty() {
-        Err(format!(
-            "Python 3 is required to generate embeddings. {}",
-            remediation
-        ))
+    let attempt_summary = if attempt_messages.is_empty() {
+        "No interpreter launch attempts were recorded.".to_string()
     } else {
-        Err(format!(
-            "Unable to launch a Python 3 runtime. {} {}",
-            attempt_messages.join(" "),
-            remediation
-        ))
-    }
+        attempt_messages
+            .iter()
+            .map(|msg| format!("- {msg}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    Err(format!(
+        "Unable to launch a Python 3 runtime.\n{}\n{}",
+        attempt_summary, remediation
+    ))
 }
 
 fn locate_bundled_python_runtime(
