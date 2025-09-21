@@ -49,7 +49,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_CONFIG: dbbs-faculty-match/src-tauri/tauri.conf.json
         with:
           projectPath: dbbs-faculty-match
 
