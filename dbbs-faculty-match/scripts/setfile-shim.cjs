@@ -2,16 +2,120 @@
 
 const { spawnSync } = require('node:child_process');
 
+const LOG_PREFIX = '[setfile-shim]';
+
+function bindConsoleMethod(method, fallback = null) {
+  if (typeof console[method] === 'function') {
+    return console[method].bind(console, LOG_PREFIX);
+  }
+
+  if (fallback && typeof console[fallback] === 'function') {
+    return console[fallback].bind(console, LOG_PREFIX);
+  }
+
+  return () => {};
+}
+
+function createConsoleLogger() {
+  return {
+    debug: bindConsoleMethod('debug', 'log'),
+    info: bindConsoleMethod('info', 'log'),
+    warn: bindConsoleMethod('warn', 'error'),
+    error: bindConsoleMethod('error', 'warn'),
+  };
+}
+
+const logger = createConsoleLogger();
+
+function setLogger(customLogger) {
+  const fallbackLogger = createConsoleLogger();
+  if (!customLogger || typeof customLogger !== 'object') {
+    Object.assign(logger, fallbackLogger);
+    return logger;
+  }
+
+  logger.debug = typeof customLogger.debug === 'function'
+    ? customLogger.debug.bind(customLogger)
+    : fallbackLogger.debug;
+  logger.info = typeof customLogger.info === 'function'
+    ? customLogger.info.bind(customLogger)
+    : fallbackLogger.info;
+  logger.warn = typeof customLogger.warn === 'function'
+    ? customLogger.warn.bind(customLogger)
+    : fallbackLogger.warn;
+  logger.error = typeof customLogger.error === 'function'
+    ? customLogger.error.bind(customLogger)
+    : fallbackLogger.error;
+
+  return logger;
+}
+
+function getLogger() {
+  return logger;
+}
+
+function formatCommand(command, args = []) {
+  return [command, ...(Array.isArray(args) ? args : [])].join(' ');
+}
+
+function formatSpawnResultDiagnostic(result) {
+  if (!result || typeof result !== 'object') {
+    return '';
+  }
+
+  const details = [];
+
+  if (result.stdout) {
+    const stdout = result.stdout.toString().trim();
+    if (stdout) {
+      details.push(stdout);
+    }
+  }
+
+  if (result.stderr) {
+    const stderr = result.stderr.toString().trim();
+    if (stderr) {
+      details.push(stderr);
+    }
+  }
+
+  if (typeof result.signal === 'string' && result.signal) {
+    details.push(`signal: ${result.signal}`);
+  }
+
+  return details.join('\n');
+}
+
+function logXattrSoftFailure(args, result, context = {}) {
+  const activeLogger = getLogger();
+  const { operation, targetPath } = context;
+  const command = formatCommand('xattr', args);
+  const baseMessage = operation
+    ? `${operation} failed with exit status ${ExitStatus.XATTR_FAILURE}; continuing without modifying Finder metadata.`
+    : `xattr exited with status ${ExitStatus.XATTR_FAILURE}; continuing without modifying Finder metadata.`;
+
+  const location = targetPath ? ` (${targetPath})` : '';
+  const diagnostic = formatSpawnResultDiagnostic(result);
+  const message = `${command}${location ? ` ${location}` : ''}`;
+
+  if (diagnostic) {
+    activeLogger.warn(`${baseMessage}\n${message}\n${diagnostic}`);
+  } else {
+    activeLogger.warn(`${baseMessage}\n${message}`);
+  }
+}
+
 const ExitStatus = {
   SUCCESS: 0,
   XATTR_FAILURE: 1,
 };
 
 function runXattr(args, options = {}) {
+  const { context, ...spawnOptions } = options;
   const result = spawnSync('xattr', args, {
     encoding: 'utf8',
     stdio: 'pipe',
-    ...options,
+    ...spawnOptions,
   });
 
   if (result.error) {
@@ -23,15 +127,14 @@ function runXattr(args, options = {}) {
 
   if (typeof result.status === 'number' && result.status !== ExitStatus.SUCCESS) {
     if (result.status === ExitStatus.XATTR_FAILURE) {
+      logXattrSoftFailure(args, result, context);
       return null;
     }
 
-    const stderr = result.stderr ? result.stderr.trim() : '';
-    const stdout = result.stdout ? result.stdout.trim() : '';
-    const diagnostic = [stdout, stderr].filter(Boolean).join('\n');
+    const diagnostic = formatSpawnResultDiagnostic(result);
 
     const error = new Error(
-      `xattr ${args.join(' ')} failed with status ${result.status}` +
+      `${formatCommand('xattr', args)} failed with status ${result.status}` +
         (diagnostic ? `\n${diagnostic}` : '')
     );
     error.result = result;
@@ -42,7 +145,9 @@ function runXattr(args, options = {}) {
 }
 
 function readFinderInfo(targetPath) {
-  const result = runXattr(['-px', 'com.apple.FinderInfo', targetPath]);
+  const result = runXattr(['-px', 'com.apple.FinderInfo', targetPath], {
+    context: { operation: 'readFinderInfo', targetPath },
+  });
   if (!result) {
     return null;
   }
@@ -93,7 +198,9 @@ function writeFinderInfo(targetPath, finderInfo) {
     'com.apple.FinderInfo',
     buffer.toString('hex'),
     targetPath,
-  ]);
+  ], {
+    context: { operation: 'writeFinderInfo', targetPath },
+  });
 
   if (!result) {
     return null;
@@ -146,6 +253,12 @@ module.exports = {
   writeFinderInfo,
   setCreatorCode,
   applyAttributeFlags,
+  logger,
+  setLogger,
+  getLogger,
+  createConsoleLogger,
+  formatCommand,
+  formatSpawnResultDiagnostic,
 };
 
 if (require.main === module) {
