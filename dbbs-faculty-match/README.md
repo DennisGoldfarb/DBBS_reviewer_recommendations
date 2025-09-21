@@ -54,3 +54,13 @@ The form displays a confirmation payload after validation so that you can review
 which settings will be submitted to the backend service. File pickers fall back
 silently if the operating system denies access; you can always paste a path into
 the accompanying text field.
+
+## Troubleshooting
+
+- **Best-effort Finder metadata updates** – macOS packaging may emit warnings
+  from the Finder metadata shim when extended attributes cannot be updated (a
+  frequent restriction on macOS 13+). The shim logs the skipped commands to
+  `SETFILE_SHIM_LOG` (or stderr) and continues bundling. Resulting DMGs will
+  still build successfully, but Finder icon flags may be missing on affected
+  files.
+
