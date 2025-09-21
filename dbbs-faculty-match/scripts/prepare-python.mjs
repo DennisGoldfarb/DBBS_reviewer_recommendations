@@ -62,11 +62,17 @@ let reuseExisting = false;
 if (fs.existsSync(metadataPath)) {
   try {
     const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-    if (metadata.requirementsHash === requirementsHash) {
+    if (
+      metadata.requirementsHash === requirementsHash &&
+      typeof metadata.pythonVersion === 'string' &&
+      metadata.pythonVersion.startsWith('3.11.')
+    ) {
       reuseExisting = true;
       console.log(`\u2705 Bundled Python runtime for ${runtimeDirName} is up to date.`);
     } else {
-      console.log(`\u2139\ufe0f Requirements changed; rebuilding bundled Python runtime for ${runtimeDirName}.`);
+      console.log(
+        `\u2139\ufe0f Runtime metadata changed; rebuilding bundled Python runtime for ${runtimeDirName}.`
+      );
     }
   } catch (error) {
     console.warn(`\u26a0\ufe0f Unable to parse ${metadataPath}; rebuilding runtime.`);
@@ -93,14 +99,32 @@ function runCommand(command, args, options = {}) {
 
 function findPythonCandidate() {
   const candidates = process.platform === 'win32'
-    ? [ ['py', '-3'], ['python3'], ['python'] ]
-    : [ ['python3'], ['python'] ];
+    ? [
+        ['py', '-3.11'],
+        ['py', '-3'],
+        ['python3.11'],
+        ['python3'],
+        ['python']
+      ]
+    : [
+        ['python3.11'],
+        ['python3'],
+        ['python']
+      ];
 
   for (const parts of candidates) {
     const [command, ...initialArgs] = parts;
-    const versionCheck = spawnSync(command, [...initialArgs, '-c', 'import sys; print(sys.version_info[0] >= 3 and sys.version_info[1] >= 9)'], {
-      stdio: ['ignore', 'pipe', 'ignore']
-    });
+    const versionCheck = spawnSync(
+      command,
+      [
+        ...initialArgs,
+        '-c',
+        'import sys; print(sys.version_info[0] == 3 and sys.version_info[1] == 11)'
+      ],
+      {
+        stdio: ['ignore', 'pipe', 'ignore']
+      }
+    );
     if (versionCheck.status === 0 && versionCheck.stdout?.toString().trim() === 'True') {
       return { command, args: initialArgs };
     }
@@ -131,7 +155,9 @@ if (!reuseExisting) {
 
   const python = findPythonCandidate();
   if (!python) {
-    fail('Unable to locate a Python 3.9+ interpreter to create the bundled runtime.');
+    fail(
+      'Unable to locate a Python 3.11 interpreter to create the bundled runtime. Install Python 3.11 and ensure it is on your PATH.'
+    );
   }
 
   console.log(`\u2139\ufe0f Using ${python.command} to create bundled Python runtime at ${runtimeDir}.`);
@@ -147,11 +173,23 @@ if (!reuseExisting) {
   runCommand(runtimePython, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel']);
   runCommand(runtimePython, ['-m', 'pip', 'install', '--no-cache-dir', '-r', requirementsPath]);
 
+  const versionResult = spawnSync(
+    runtimePython,
+    ['-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))'],
+    {
+      stdio: ['ignore', 'pipe', 'inherit']
+    }
+  );
+  if (versionResult.status !== 0) {
+    fail('Unable to determine the Python version for the bundled runtime.');
+  }
+
   const metadata = {
     requirementsHash,
     createdAt: new Date().toISOString(),
     platform,
-    arch
+    arch,
+    pythonVersion: versionResult.stdout?.toString().trim()
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   console.log(`\u2705 Bundled Python runtime prepared for ${runtimeDirName}.`);

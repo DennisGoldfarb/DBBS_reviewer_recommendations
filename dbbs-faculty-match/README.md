@@ -34,8 +34,9 @@ referenced files and directories exist before the matching backend is wired in.
    ```
 
 4. (Optional) Prepare the embedded Python runtime that ships with the desktop
-   installers. This step runs automatically during `tauri build`, but you can
-   invoke it manually to verify dependency installation:
+   installers. This step requires Python **3.11** to be installed and available
+   on your `PATH`, runs automatically during `tauri build`, and can be invoked
+   manually to verify dependency installation:
 
    ```bash
    npm run prepare-python
