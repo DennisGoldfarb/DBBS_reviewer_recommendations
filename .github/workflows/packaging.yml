@@ -45,12 +45,22 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Tauri application
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: dbbs-faculty-match
+      - name: Debug show resources seen by CI
+        shell: bash
+        run: |
+          echo "PWD=$(pwd)"
+          ls -la
+          echo "Tree under dbbs-faculty-match/src-tauri:"
+          find dbbs-faculty-match/src-tauri -maxdepth 2 -print
+          echo "List resources:"
+          find dbbs-faculty-match/src-tauri/resources -type f -print || true
+
+            - name: Build Tauri application
+              uses: tauri-apps/tauri-action@v0
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                projectPath: dbbs-faculty-match
 
   create-release:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
