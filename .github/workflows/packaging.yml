@@ -60,6 +60,26 @@ jobs:
         run: |
           dism /online /enable-feature /featurename:NetFx3 /All
 
+      - name: Install WiX Toolset (stable) and expose path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install wixtoolset --version=3.11.2 -y
+          $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+          if (!(Test-Path $wix)) { throw "WiX bin not found at $wix" }
+          # Tell Tauri where WiX lives:
+          "WIX=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TAURI_WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # Optional: also add to PATH so we can probe light.exe
+          "PATH=$wix;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Sanity-check WiX light.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          light.exe -? | Select-Object -First 1
+
+
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
         env:
@@ -189,6 +209,25 @@ jobs:
         shell: pwsh
         run: |
           dism /online /enable-feature /featurename:NetFx3 /All
+
+      - name: Install WiX Toolset (stable) and expose path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install wixtoolset --version=3.11.2 -y
+          $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+          if (!(Test-Path $wix)) { throw "WiX bin not found at $wix" }
+          # Tell Tauri where WiX lives:
+          "WIX=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TAURI_WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # Optional: also add to PATH so we can probe light.exe
+          "PATH=$wix;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Sanity-check WiX light.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          light.exe -? | Select-Object -First 1
 
       - name: Build Tauri application
         working-directory: dbbs-faculty-match
