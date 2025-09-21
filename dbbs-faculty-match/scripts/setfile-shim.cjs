@@ -1,50 +1,11 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require('node:child_process');
-const { existsSync, mkdirSync, createWriteStream } = require('node:fs');
-const { dirname, resolve } = require('node:path');
-const { Console } = require('node:console');
 
 const ExitStatus = {
   SUCCESS: 0,
   XATTR_FAILURE: 1,
 };
-
-const LOG_PATH = process.env.SETFILE_SHIM_LOG
-  ? resolve(process.env.SETFILE_SHIM_LOG)
-  : null;
-
-function ensureLogStream(path) {
-  if (!path) {
-    return null;
-  }
-
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  return createWriteStream(path, { flags: 'a' });
-}
-
-const logStream = ensureLogStream(LOG_PATH);
-const shimConsole = logStream
-  ? new Console(logStream, logStream)
-  : new Console(process.stdout, process.stderr);
-
-function formatArgs(args) {
-  return args
-    .map((part) => (part.includes(' ') ? `"${part}"` : part))
-    .join(' ');
-}
-
-function warn(message) {
-  shimConsole.warn(`[setfile-shim] ${message}`);
-}
-
-function info(message) {
-  shimConsole.log(`[setfile-shim] ${message}`);
-}
 
 function runXattr(args, options = {}) {
   const result = spawnSync('xattr', args, {
@@ -62,10 +23,6 @@ function runXattr(args, options = {}) {
 
   if (typeof result.status === 'number' && result.status !== ExitStatus.SUCCESS) {
     if (result.status === ExitStatus.XATTR_FAILURE) {
-      warn(
-        `xattr ${formatArgs(args)} exited with status ${result.status}.` +
-          (result.stderr ? ` stderr: ${result.stderr.trim()}` : '')
-      );
       return null;
     }
 
@@ -74,7 +31,7 @@ function runXattr(args, options = {}) {
     const diagnostic = [stdout, stderr].filter(Boolean).join('\n');
 
     const error = new Error(
-      `xattr ${formatArgs(args)} failed with status ${result.status}` +
+      `xattr ${args.join(' ')} failed with status ${result.status}` +
         (diagnostic ? `\n${diagnostic}` : '')
     );
     error.result = result;
@@ -87,7 +44,6 @@ function runXattr(args, options = {}) {
 function readFinderInfo(targetPath) {
   const result = runXattr(['-px', 'com.apple.FinderInfo', targetPath]);
   if (!result) {
-    warn(`FinderInfo read skipped for ${targetPath}.`);
     return null;
   }
 
@@ -108,7 +64,6 @@ function readFinderInfo(targetPath) {
     buffer.copy(expanded, 0, 0, buffer.length);
     return expanded;
   } catch (error) {
-    warn(`Unable to parse FinderInfo for ${targetPath}: ${error.message}`);
     return Buffer.alloc(32);
   }
 }
@@ -141,7 +96,6 @@ function writeFinderInfo(targetPath, finderInfo) {
   ]);
 
   if (!result) {
-    warn(`FinderInfo update skipped for ${targetPath}. Continuing without Finder metadata.`);
     return null;
   }
 
@@ -151,7 +105,6 @@ function writeFinderInfo(targetPath, finderInfo) {
 function setCreatorCode(targetPath, creatorCode) {
   const info = readFinderInfo(targetPath);
   if (info === null) {
-    warn(`Creator code update skipped for ${targetPath}.`);
     return null;
   }
 
@@ -161,7 +114,6 @@ function setCreatorCode(targetPath, creatorCode) {
 
   const result = writeFinderInfo(targetPath, buffer);
   if (!result) {
-    warn(`Creator code update skipped for ${targetPath}. Continuing without Finder metadata.`);
     return null;
   }
 
@@ -171,7 +123,6 @@ function setCreatorCode(targetPath, creatorCode) {
 function applyAttributeFlags(targetPath, { set = 0, clear = 0 } = {}) {
   const info = readFinderInfo(targetPath);
   if (info === null) {
-    warn(`Attribute flag update skipped for ${targetPath}.`);
     return null;
   }
 
@@ -182,7 +133,6 @@ function applyAttributeFlags(targetPath, { set = 0, clear = 0 } = {}) {
 
   const result = writeFinderInfo(targetPath, buffer);
   if (!result) {
-    warn(`Finder attribute flags skipped for ${targetPath}. Continuing without Finder metadata.`);
     return null;
   }
 
@@ -201,14 +151,13 @@ module.exports = {
 if (require.main === module) {
   const [, , ...argv] = process.argv;
   if (argv.length === 0) {
-    info('setfile-shim invoked without arguments; no-op.');
     process.exit(0);
   }
 
   try {
     runXattr(argv);
   } catch (error) {
-    warn(error.message);
+    console.error(error.message);
     process.exitCode = 1;
   }
 }

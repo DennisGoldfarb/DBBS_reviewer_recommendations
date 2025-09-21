@@ -55,11 +55,3 @@ which settings will be submitted to the backend service. File pickers fall back
 silently if the operating system denies access; you can always paste a path into
 the accompanying text field.
 
-## Troubleshooting
-
-### macOS packaging warnings
-
-When the macOS packaging shim cannot update Finder metadata (for example, on a
-filesystem that blocks extended attributes) it now falls back to a best-effort
-mode. The DMG build will finish successfully, but Finder-specific icon flags may
-be missing. Check the shim log for warnings when this occurs.
