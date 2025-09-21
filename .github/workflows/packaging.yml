@@ -70,7 +70,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Try common locations first
+          # Try common WiX 3.14/3.11 locations (x86 first, then x64)
           $candidates = @(
             "$env:ProgramFiles(x86)\WiX Toolset v3.14\bin",
             "$env:ProgramFiles\WiX Toolset v3.14\bin",
@@ -79,45 +79,34 @@ jobs:
           ) | Where-Object { Test-Path $_ }
 
           if (-not $candidates) {
-            # Fall back: search for any "WiX Toolset v3.*\bin"
-            $roots = @("C:\Program Files", "C:\Program Files (x86)")
-            $found = foreach ($root in $roots) {
-              if (Test-Path $root) {
-                Get-ChildItem -Path $root -Directory -Filter "WiX Toolset v3.*" -ErrorAction SilentlyContinue |
-                  Sort-Object Name -Descending |
-                  Select-Object -First 1
-              }
-            } | Where-Object { $_ } | Select-Object -First 1
-
-            if ($found) {
-              $candidates = @((Join-Path $found.FullName "bin"))
+            # Fallback: find any WiX v3.* install, pick the latest by name
+            $dirs = @("C:\Program Files", "C:\Program Files (x86)") |
+              ForEach-Object { if (Test-Path $_) { Get-ChildItem -Path $_ -Directory -Filter "WiX Toolset v3.*" -ErrorAction SilentlyContinue } }
+            if ($dirs) {
+              $dirs = $dirs | Sort-Object Name -Descending
+              $cand = Join-Path $dirs[0].FullName "bin"
+              if (Test-Path $cand) { $candidates = @($cand) }
             }
           }
 
-          if (-not $candidates) {
-            Write-Error "WiX installation not found."
-            exit 1
-          }
+          if (-not $candidates) { throw "WiX installation not found." }
 
           $wix = $candidates[0]
           $light = Join-Path $wix "light.exe"
-          if (-not (Test-Path $light)) {
-            Write-Error "Found WiX folder '$wix' but light.exe not present."
-            exit 1
-          }
+          if (-not (Test-Path $light)) { throw "Found WiX at '$wix' but light.exe is missing." }
 
-          # Prefer installed WiX over Tauri's cached copy
           "TAURI_WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "WIX=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "WIX=$wix"            | Out-File -FilePath $env:GITHUB_ENV -Append
           "PATH=$wix;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Verify WiX light.exe works
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Write-Host "Using TAURI_WIX_PATH=$env:TAURI_WIX_PATH"
+          Write-Host "TAURI_WIX_PATH=$env:TAURI_WIX_PATH"
           Get-Command light.exe
-          & light.exe -? | Select-Object -First 1
+          light.exe -? | Select-Object -First 1
+
 
 
       - name: Build Tauri application
@@ -260,7 +249,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Try common locations first
+          # Try common WiX 3.14/3.11 locations (x86 first, then x64)
           $candidates = @(
             "$env:ProgramFiles(x86)\WiX Toolset v3.14\bin",
             "$env:ProgramFiles\WiX Toolset v3.14\bin",
@@ -269,45 +258,33 @@ jobs:
           ) | Where-Object { Test-Path $_ }
 
           if (-not $candidates) {
-            # Fall back: search for any "WiX Toolset v3.*\bin"
-            $roots = @("C:\Program Files", "C:\Program Files (x86)")
-            $found = foreach ($root in $roots) {
-              if (Test-Path $root) {
-                Get-ChildItem -Path $root -Directory -Filter "WiX Toolset v3.*" -ErrorAction SilentlyContinue |
-                  Sort-Object Name -Descending |
-                  Select-Object -First 1
-              }
-            } | Where-Object { $_ } | Select-Object -First 1
-
-            if ($found) {
-              $candidates = @((Join-Path $found.FullName "bin"))
+            # Fallback: find any WiX v3.* install, pick the latest by name
+            $dirs = @("C:\Program Files", "C:\Program Files (x86)") |
+              ForEach-Object { if (Test-Path $_) { Get-ChildItem -Path $_ -Directory -Filter "WiX Toolset v3.*" -ErrorAction SilentlyContinue } }
+            if ($dirs) {
+              $dirs = $dirs | Sort-Object Name -Descending
+              $cand = Join-Path $dirs[0].FullName "bin"
+              if (Test-Path $cand) { $candidates = @($cand) }
             }
           }
 
-          if (-not $candidates) {
-            Write-Error "WiX installation not found."
-            exit 1
-          }
+          if (-not $candidates) { throw "WiX installation not found." }
 
           $wix = $candidates[0]
           $light = Join-Path $wix "light.exe"
-          if (-not (Test-Path $light)) {
-            Write-Error "Found WiX folder '$wix' but light.exe not present."
-            exit 1
-          }
+          if (-not (Test-Path $light)) { throw "Found WiX at '$wix' but light.exe is missing." }
 
-          # Prefer installed WiX over Tauri's cached copy
           "TAURI_WIX_PATH=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "WIX=$wix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "WIX=$wix"            | Out-File -FilePath $env:GITHUB_ENV -Append
           "PATH=$wix;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Verify WiX light.exe works
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Write-Host "Using TAURI_WIX_PATH=$env:TAURI_WIX_PATH"
+          Write-Host "TAURI_WIX_PATH=$env:TAURI_WIX_PATH"
           Get-Command light.exe
-          & light.exe -? | Select-Object -First 1
+          light.exe -? | Select-Object -First 1
 
       - name: Build Tauri application
         working-directory: dbbs-faculty-match
