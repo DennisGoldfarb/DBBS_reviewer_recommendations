@@ -56,6 +56,22 @@ function hashFile(filePath) {
   return hash.digest('hex');
 }
 
+function removePythonBytecode(rootDir) {
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '__pycache__') {
+        fs.rmSync(entryPath, { recursive: true, force: true });
+      } else {
+        removePythonBytecode(entryPath);
+      }
+    } else if (entry.isFile() && entry.name.endsWith('.pyc')) {
+      fs.rmSync(entryPath, { force: true });
+    }
+  }
+}
+
 const requirementsHash = hashFile(requirementsPath);
 let reuseExisting = false;
 
@@ -193,4 +209,9 @@ if (!reuseExisting) {
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   console.log(`\u2705 Bundled Python runtime prepared for ${runtimeDirName}.`);
+}
+
+if (fs.existsSync(runtimeDir)) {
+  console.log('\u2139\ufe0f Removing Python bytecode caches from bundled runtime to avoid long Windows paths.');
+  removePythonBytecode(runtimeDir);
 }
