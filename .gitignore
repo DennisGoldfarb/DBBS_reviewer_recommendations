@@ -34,3 +34,4 @@ pnpm-debug.log*
 #.idea/
 
 **/.venv
+dbbs-faculty-match/src-tauri/resources/python/
