@@ -72,6 +72,36 @@ function removePythonBytecode(rootDir) {
   }
 }
 
+function removeDirectoryIfExists(targetPath) {
+  if (fs.existsSync(targetPath)) {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  }
+}
+
+function pruneBundledRuntime(rootDir) {
+  const sitePackagesCandidates = [
+    path.join(rootDir, 'Lib', 'site-packages'),
+    path.join(rootDir, 'lib', 'python3.11', 'site-packages')
+  ];
+
+  for (const sitePackages of sitePackagesCandidates) {
+    if (!fs.existsSync(sitePackages)) {
+      continue;
+    }
+
+    const torchDir = path.join(sitePackages, 'torch');
+    if (fs.existsSync(torchDir)) {
+      const includeDir = path.join(torchDir, 'include');
+      if (fs.existsSync(includeDir)) {
+        console.log(
+          '\u2139\ufe0f Removing torch C++ headers from bundled runtime to keep Windows paths short.'
+        );
+        removeDirectoryIfExists(includeDir);
+      }
+    }
+  }
+}
+
 const requirementsHash = hashFile(requirementsPath);
 let reuseExisting = false;
 
@@ -214,4 +244,5 @@ if (!reuseExisting) {
 if (fs.existsSync(runtimeDir)) {
   console.log('\u2139\ufe0f Removing Python bytecode caches from bundled runtime to avoid long Windows paths.');
   removePythonBytecode(runtimeDir);
+  pruneBundledRuntime(runtimeDir);
 }
