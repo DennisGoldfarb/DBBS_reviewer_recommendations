@@ -45,15 +45,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: show Tauri build context
-        shell: bash
-        run: |
-          echo "CWD before build: $(pwd)"
-          echo "ProjectPath listing:"
-          find dbbs-faculty-match -maxdepth 2 -type d -print
-          echo "Expecting resources here:"
-          ls -la dbbs-faculty-match/src-tauri/resources || true
-
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
         env:
