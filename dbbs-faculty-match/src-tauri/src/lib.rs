@@ -2391,7 +2391,7 @@ fn run_embedding_helper(
     payload: &EmbeddingRequestPayload,
 ) -> Result<EmbeddingResponsePayload, String> {
     let total_rows = payload.texts.len();
-    let mut child = spawn_python_helper()?;
+    let mut child = spawn_python_helper(app_handle)?;
     let input = serde_json::to_vec(payload)
         .map_err(|err| format!("Unable to serialize the embedding request: {err}"))?;
 
@@ -2522,8 +2522,60 @@ fn run_embedding_helper(
     }
 }
 
-fn spawn_python_helper() -> Result<Child, String> {
+struct BundledPythonRuntime {
+    executable: PathBuf,
+    root: PathBuf,
+}
+
+fn expected_bundled_runtime_root(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    app_handle.path().resource_dir().ok().map(|resource_dir| {
+        resource_dir.join("python").join(format!(
+            "{}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ))
+    })
+}
+
+fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
     let script = PYTHON_EMBEDDING_HELPER;
+    let mut attempt_messages: Vec<String> = Vec::new();
+
+    let bundled_runtime = locate_bundled_python_runtime(app_handle)?;
+
+    if let Some(runtime) = bundled_runtime {
+        match Command::new(&runtime.executable)
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+            .env("TOKENIZERS_PARALLELISM", "false")
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONUNBUFFERED", "1")
+            .env("VIRTUAL_ENV", runtime.root.as_os_str())
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(err) => {
+                attempt_messages.push(format!(
+                    "Bundled runtime at {}: {err}.",
+                    runtime.executable.display()
+                ));
+            }
+        }
+    } else if let Some(expected_root) = expected_bundled_runtime_root(app_handle) {
+        attempt_messages.push(format!(
+            "Bundled runtime not found at {}.",
+            expected_root.display()
+        ));
+    } else {
+        attempt_messages.push(
+            "Bundled runtime path could not be determined from the application resources directory.".to_string(),
+        );
+    }
+
     let candidates = ["python3", "python"];
 
     for candidate in candidates {
@@ -2535,21 +2587,95 @@ fn spawn_python_helper() -> Result<Child, String> {
             .stderr(Stdio::piped())
             .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
             .env("TOKENIZERS_PARALLELISM", "false")
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONUNBUFFERED", "1")
             .spawn()
         {
             Ok(child) => return Ok(child),
             Err(err) => {
+                let message = if err.kind() == std::io::ErrorKind::NotFound {
+                    format!("System interpreter '{candidate}' was not found on the PATH.")
+                } else {
+                    format!("System interpreter '{candidate}': {err}.")
+                };
+                attempt_messages.push(message);
                 if err.kind() == std::io::ErrorKind::NotFound {
                     continue;
                 }
-                return Err(format!("Unable to launch {candidate}: {err}"));
             }
         }
     }
 
-    Err(
-        "Python 3 is required to generate embeddings. Install Python along with the 'torch' and 'transformers' packages.".into(),
-    )
+    let remediation =
+        "Reinstall the application to restore the bundled runtime or install Python with the 'torch' and 'transformers' packages.";
+
+    let attempt_summary = if attempt_messages.is_empty() {
+        "No interpreter launch attempts were recorded.".to_string()
+    } else {
+        attempt_messages
+            .iter()
+            .map(|msg| format!("- {msg}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    Err(format!(
+        "Unable to launch a Python 3 runtime.\n{}\n{}",
+        attempt_summary, remediation
+    ))
+}
+
+fn locate_bundled_python_runtime(
+    app_handle: &tauri::AppHandle,
+) -> Result<Option<BundledPythonRuntime>, String> {
+    let resource_dir = match app_handle.path().resource_dir() {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+
+    let runtime_root = resource_dir.join("python").join(format!(
+        "{}-{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+
+    if !runtime_root.exists() {
+        return Ok(None);
+    }
+
+    let scripts_dir = if cfg!(target_os = "windows") {
+        runtime_root.join("Scripts")
+    } else {
+        runtime_root.join("bin")
+    };
+
+    if !scripts_dir.exists() {
+        return Err(format!(
+            "The bundled Python runtime is missing the interpreter directory at {}.",
+            scripts_dir.display()
+        ));
+    }
+
+    let candidate_names: &[&str] = if cfg!(target_os = "windows") {
+        &["python.exe", "python"]
+    } else {
+        &["python3", "python"]
+    };
+
+    for name in candidate_names {
+        let candidate = scripts_dir.join(name);
+        if candidate.exists() {
+            return Ok(Some(BundledPythonRuntime {
+                executable: candidate,
+                root: runtime_root,
+            }));
+        }
+    }
+
+    Err(format!(
+        "The bundled Python runtime at {} does not contain a Python interpreter.",
+        runtime_root.display()
+    ))
 }
 
 const PYTHON_EMBEDDING_HELPER: &str = r#"
