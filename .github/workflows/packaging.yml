@@ -248,13 +248,63 @@ jobs:
         shell: pwsh
         run: |
           choco upgrade nsis -y --no-progress
+          $refresh = Join-Path $env:ChocolateyInstall 'bin/RefreshEnv.cmd'
+          if (Test-Path $refresh) {
+            & $refresh | Out-Null
+          }
+
+          $candidateDirs = @()
+          if ($env:ProgramFiles) {
+            $candidateDirs += (Join-Path $env:ProgramFiles 'NSIS')
+          }
+          if (${env:ProgramFiles(x86)}) {
+            $candidateDirs += (Join-Path ${env:ProgramFiles(x86)} 'NSIS')
+          }
+          if ($env:ChocolateyInstall) {
+            $candidateDirs += Get-ChildItem -Path (Join-Path $env:ChocolateyInstall 'lib') -Directory -Filter 'nsis*' |
+              Sort-Object LastWriteTime -Descending |
+              ForEach-Object { Join-Path $_.FullName 'tools' }
+          }
+
+          foreach ($dir in $candidateDirs | Where-Object { $_ -and (Test-Path $_) }) {
+            if (Test-Path (Join-Path $dir 'makensis.exe')) {
+              $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              Write-Host "Added $dir to PATH"
+              break
+            }
+          }
 
       - name: Verify makensis works
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Get-Command makensis
-          makensis /VERSION
+          $command = Get-Command makensis -ErrorAction SilentlyContinue
+          if (-not $command) {
+            $candidates = @()
+            if ($env:ProgramFiles) {
+              $candidates += (Join-Path $env:ProgramFiles 'NSIS/makensis.exe')
+            }
+            if (${env:ProgramFiles(x86)}) {
+              $candidates += (Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe')
+            }
+            if ($env:ChocolateyInstall) {
+              $candidates += Get-ChildItem -Path (Join-Path $env:ChocolateyInstall 'lib') -Directory -Filter 'nsis*' |
+                Sort-Object LastWriteTime -Descending |
+                ForEach-Object { Join-Path $_.FullName 'tools/makensis.exe' }
+            }
+
+            foreach ($candidate in $candidates | Where-Object { $_ -and (Test-Path $_) }) {
+              $command = Get-Item $candidate
+              break
+            }
+          }
+
+          if (-not $command) {
+            throw 'makensis executable not found after installing NSIS'
+          }
+
+          $exePath = if ($command -is [System.Management.Automation.CommandInfo]) { $command.Source } else { $command.FullName }
+          & $exePath /VERSION
 
       - name: Build Tauri application
         working-directory: dbbs-faculty-match
