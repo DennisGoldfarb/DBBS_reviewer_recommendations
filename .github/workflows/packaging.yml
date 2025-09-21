@@ -123,6 +123,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DBBS_TAURI_DIAGNOSTICS: "1"
+          DBBS_TAURI_DEBUG: "1"
         with:
           projectPath: dbbs-faculty-match
 
@@ -258,10 +260,12 @@ jobs:
 
       - name: Build Tauri application
         working-directory: dbbs-faculty-match
-        run: npm exec -- tauri build --ci
+        run: npm run tauri -- --diagnostics build --ci
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
+          DBBS_TAURI_DIAGNOSTICS: "1"
+          DBBS_TAURI_DEBUG: "1"
 
       - name: Rename Windows installer
         if: runner.os == 'Windows'
