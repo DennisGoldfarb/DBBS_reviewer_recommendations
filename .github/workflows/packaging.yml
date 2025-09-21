@@ -45,15 +45,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Debug show resources seen by CI
+      - name: show Tauri build context
         shell: bash
         run: |
-          echo "PWD=$(pwd)"
-          ls -la
-          echo "Tree under dbbs-faculty-match/src-tauri:"
-          find dbbs-faculty-match/src-tauri -maxdepth 2 -print
-          echo "List resources:"
-          find dbbs-faculty-match/src-tauri/resources -type f -print || true
+          echo "CWD before build: $(pwd)"
+          echo "ProjectPath listing:"
+          find dbbs-faculty-match -maxdepth 2 -type d -print
+          echo "Expecting resources here:"
+          ls -la dbbs-faculty-match/src-tauri/resources || true
 
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
