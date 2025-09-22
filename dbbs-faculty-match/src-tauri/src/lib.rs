@@ -2798,12 +2798,24 @@ fn run_embedding_helper(
         .stdin
         .take()
         .ok_or_else(|| "Unable to access the embedding helper stdin.".to_string())?;
-    stdin
-        .write_all(&input)
-        .map_err(|err| format!("Unable to send data to the embedding helper: {err}"))?;
-    stdin
-        .flush()
-        .map_err(|err| format!("Unable to flush embedding helper input: {err}"))?;
+    if let Err(err) = stdin.write_all(&input) {
+        drop(stdin);
+        let message = enrich_embedding_helper_error(
+            child,
+            format!("Unable to send data to the embedding helper: {err}"),
+        );
+        emit_embedding_error(app_handle, total_rows, &message);
+        return Err(message);
+    }
+    if let Err(err) = stdin.flush() {
+        drop(stdin);
+        let message = enrich_embedding_helper_error(
+            child,
+            format!("Unable to flush embedding helper input: {err}"),
+        );
+        emit_embedding_error(app_handle, total_rows, &message);
+        return Err(message);
+    }
     drop(stdin);
 
     let stdout = child
@@ -2918,6 +2930,38 @@ fn run_embedding_helper(
             emit_embedding_error(app_handle, total_rows, &error_message);
             Err(error_message)
         }
+    }
+}
+
+fn enrich_embedding_helper_error(child: Child, base_message: String) -> String {
+    match child.wait_with_output() {
+        Ok(output) => {
+            let mut message = base_message;
+
+            let stderr_text = String::from_utf8_lossy(&output.stderr);
+            let stderr_trimmed = stderr_text.trim_end();
+            if !stderr_trimmed.is_empty() {
+                message = format!(
+                    "{message}\n\nEmbedding helper stderr:\n{stderr_trimmed}"
+                );
+            }
+
+            let stdout_text = String::from_utf8_lossy(&output.stdout);
+            let stdout_trimmed = stdout_text.trim_end();
+            if !stdout_trimmed.is_empty() {
+                message = format!(
+                    "{message}\n\nEmbedding helper stdout:\n{stdout_trimmed}"
+                );
+            }
+
+            format!(
+                "{message}\n\nEmbedding helper exit status: {status}",
+                status = output.status
+            )
+        }
+        Err(err) => format!(
+            "{base_message}\n\nAdditionally, the embedding helper output could not be captured: {err}"
+        ),
     }
 }
 
@@ -3403,19 +3447,7 @@ fn restore_default_faculty_dataset(
 ) -> Result<FacultyDatasetStatus, String> {
     let destination =
         dataset_destination_for_extension(&app_handle, FACULTY_DATASET_DEFAULT_EXTENSION)?;
-    ensure_dataset_directory(&destination)?;
-    if let Some(directory) = destination.parent() {
-        remove_other_dataset_variants(directory, FACULTY_DATASET_DEFAULT_EXTENSION)?;
-    }
-    fs::write(&destination, DEFAULT_FACULTY_DATASET)
-        .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
-
-    let embeddings_path = dataset_directory(&app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
-    ensure_dataset_directory(&embeddings_path)?;
-    fs::write(&embeddings_path, DEFAULT_FACULTY_EMBEDDINGS)
-        .map_err(|err| format!("Unable to restore the default faculty embeddings: {err}"))?;
-
-    let _ = clear_faculty_dataset_source_path(&app_handle);
+    ensure_default_faculty_dataset(&app_handle, &destination)?;
 
     let mut status = build_faculty_dataset_status(&app_handle)?;
     if status.message.is_none() {
@@ -3430,6 +3462,26 @@ fn restore_default_faculty_dataset(
     }
 
     Ok(status)
+}
+
+fn ensure_default_faculty_dataset(
+    app_handle: &tauri::AppHandle,
+    destination: &Path,
+) -> Result<(), String> {
+    ensure_dataset_directory(destination)?;
+    if let Some(directory) = destination.parent() {
+        remove_other_dataset_variants(directory, FACULTY_DATASET_DEFAULT_EXTENSION)?;
+    }
+    fs::write(destination, DEFAULT_FACULTY_DATASET)
+        .map_err(|err| format!("Unable to restore the default faculty dataset: {err}"))?;
+
+    let embeddings_path = dataset_directory(app_handle)?.join(FACULTY_EMBEDDINGS_NAME);
+    ensure_dataset_directory(&embeddings_path)?;
+    fs::write(&embeddings_path, DEFAULT_FACULTY_EMBEDDINGS)
+        .map_err(|err| format!("Unable to restore the default faculty embeddings: {err}"))?;
+
+    let _ = clear_faculty_dataset_source_path(app_handle);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3736,6 +3788,18 @@ fn build_faculty_dataset_status_with_overrides(
         preview: None,
         analysis: None,
     };
+
+    if !dataset_path.exists() {
+        if let Err(init_err) = ensure_default_faculty_dataset(app_handle, &dataset_path) {
+            let _ = clear_faculty_dataset_metadata(app_handle);
+            let _ = clear_faculty_dataset_source_path(app_handle);
+            status.message = Some(format!(
+                "Unable to restore the packaged faculty dataset: {init_err}"
+            ));
+            status.message_variant = Some("error".into());
+            return Ok(status);
+        }
+    }
 
     if !dataset_path.exists() {
         let _ = clear_faculty_dataset_metadata(app_handle);
