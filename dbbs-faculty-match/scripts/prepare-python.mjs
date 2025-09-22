@@ -210,12 +210,18 @@ function determinePythonVersion(pythonExecutable) {
   return result.stdout?.toString().trim();
 }
 
-function rewritePyVenvCfg(runtimePath, pythonVersion) {
+function rewritePyVenvCfg(runtimePath, pythonExecutable, pythonVersion) {
   const cfgPath = path.join(runtimePath, 'pyvenv.cfg');
 
   if (!fs.existsSync(cfgPath)) {
     console.warn(`\u26a0\ufe0f pyvenv.cfg was not found at ${cfgPath}.`);
     return;
+  }
+
+  const executableDir = pythonExecutable ? path.dirname(pythonExecutable) : null;
+  let relativeHome = executableDir ? path.relative(runtimePath, executableDir) : null;
+  if (!relativeHome || relativeHome === '') {
+    relativeHome = '.';
   }
 
   const lines = fs.readFileSync(cfgPath, 'utf8').split(/\r?\n/);
@@ -246,7 +252,7 @@ function rewritePyVenvCfg(runtimePath, pythonVersion) {
     entries.delete(key.toLowerCase());
   };
 
-  setEntry('home', '.');
+  setEntry('home', relativeHome);
   if (!entries.has('include-system-site-packages')) {
     setEntry('include-system-site-packages', 'false');
   }
@@ -322,7 +328,7 @@ if (!reuseExisting) {
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   console.log(`\u2705 Bundled Python runtime prepared for ${runtimeDirName}.`);
-  rewritePyVenvCfg(runtimeDir, pythonVersion);
+  rewritePyVenvCfg(runtimeDir, runtimePython, pythonVersion);
 } else {
   runtimePython = resolveRuntimePython(runtimeDir);
   if (!runtimePython) {
@@ -338,7 +344,7 @@ if (!reuseExisting) {
     metadata.pyvenvRelocatable = true;
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   }
-  rewritePyVenvCfg(runtimeDir, pythonVersion);
+  rewritePyVenvCfg(runtimeDir, runtimePython, pythonVersion);
 }
 
 if (fs.existsSync(runtimeDir)) {
