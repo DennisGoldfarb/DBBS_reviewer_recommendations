@@ -133,7 +133,7 @@ interface EmbeddingProgressPayload {
   estimatedRemainingSeconds?: number | null;
 }
 
-const THEME_STORAGE_KEY = "washu-theme";
+export const THEME_STORAGE_KEY = "washu-theme";
 
 const getStoredThemePreference = (): ThemePreference => {
   if (typeof window === "undefined") {
@@ -145,7 +145,7 @@ const getStoredThemePreference = (): ThemePreference => {
     return stored;
   }
 
-  return "light";
+  return "dark";
 };
 
 const formatDuration = (valueInSeconds: number): string => {
