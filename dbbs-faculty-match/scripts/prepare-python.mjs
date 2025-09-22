@@ -46,6 +46,56 @@ const pythonRootDir = path.join(resourcesDir, 'python');
 const runtimeDir = path.join(pythonRootDir, runtimeDirName);
 const metadataPath = path.join(runtimeDir, '.bundle-metadata.json');
 
+function ensureSetFileShim() {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const shimSource = path.join(projectRoot, 'scripts', 'setfile-shim.cjs');
+  if (!fs.existsSync(shimSource)) {
+    return;
+  }
+
+  const binDir = path.join(projectRoot, 'node_modules', '.bin');
+  const shimTarget = path.join(binDir, 'SetFile');
+  const fallbackScript = `#!/bin/sh
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+exec node "$SCRIPT_DIR/../scripts/setfile-shim.cjs" "$@"
+`;
+
+  ensureDirectory(binDir);
+
+  try {
+    if (fs.existsSync(shimTarget)) {
+      const stats = fs.lstatSync(shimTarget);
+      if (stats.isSymbolicLink()) {
+        const resolved = path.resolve(binDir, fs.readlinkSync(shimTarget));
+        if (resolved === shimSource) {
+          return;
+        }
+      } else if (stats.isFile()) {
+        const existing = fs.readFileSync(shimTarget, 'utf8');
+        if (existing === fallbackScript) {
+          fs.chmodSync(shimTarget, 0o755);
+          return;
+        }
+      }
+      fs.rmSync(shimTarget, { force: true });
+    }
+  } catch (error) {
+    fs.rmSync(shimTarget, { force: true });
+  }
+
+  try {
+    const relativeShim = path.relative(binDir, shimSource);
+    fs.symlinkSync(relativeShim, shimTarget);
+  } catch (error) {
+    fs.writeFileSync(shimTarget, fallbackScript, { mode: 0o755 });
+  }
+}
+
+ensureSetFileShim();
+
 function ensureDirectory(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
