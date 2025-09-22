@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as Base64Engine, Engine as _};
 use calamine::{open_workbook_auto, DataType, Reader};
 use chrono::{DateTime, Utc};
 use docx_rs::{
@@ -6,6 +7,7 @@ use docx_rs::{
 };
 use pdf_extract::extract_text_from_mem;
 use rtf_parser::RtfDocument;
+use rust_xlsxwriter::{Format, Workbook};
 use serde::{Deserialize, Serialize};
 use std::char;
 use std::cmp::Ordering;
@@ -769,6 +771,8 @@ struct GeneratedSpreadsheet {
     filename: String,
     mime_type: String,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoding: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -791,6 +795,15 @@ struct SpreadsheetMatchResults {
     total_rows: usize,
     preview: SpreadsheetPreview,
     spreadsheet: GeneratedSpreadsheet,
+}
+
+#[derive(Debug, Clone)]
+struct MatchEntry {
+    student_values: Vec<String>,
+    faculty_values: Vec<String>,
+    similarity: Option<f32>,
+    student_rank: Option<(usize, Option<usize>)>,
+    faculty_rank: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -1249,59 +1262,74 @@ fn process_directory_documents(
         .filter(|result| !result.matches.is_empty())
         .count();
 
-    let mut headers = vec![
-        "Document".to_string(),
-        "Faculty rank".to_string(),
-        "Student rank".to_string(),
-        "Similarity".to_string(),
-    ];
-    headers.extend(index.identifier_columns.clone());
+    let student_headers = vec!["Document".to_string()];
+    let faculty_headers = index.identifier_columns.clone();
+    let headers = build_matches_headers(&student_headers, &faculty_headers);
 
-    let mut rows = Vec::new();
+    let mut preview_rows: Vec<Vec<String>> = Vec::new();
+    let mut match_entries: Vec<MatchEntry> = Vec::new();
+    let mut student_summary_rows: Vec<Vec<String>> = Vec::new();
+
     for result in &document_results {
+        student_summary_rows.push(vec![result.identifier.clone()]);
+
         if result.matches.is_empty() {
             let message = result
                 .status_message
                 .clone()
                 .unwrap_or_else(|| "No faculty matches were returned.".into());
-            let mut row = vec![
-                result.identifier.clone(),
-                String::new(),
-                String::new(),
-                message,
-            ];
-            for _ in &index.identifier_columns {
-                row.push(String::new());
+            let mut preview_row = Vec::new();
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            preview_row.push(result.identifier.clone());
+            preview_row.extend(vec![String::new(); faculty_headers.len()]);
+            preview_row.push(message);
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            if preview_rows.len() < 20 {
+                preview_rows.push(preview_row);
             }
-            rows.push(row);
             continue;
         }
 
         for (rank, faculty) in result.matches.iter().enumerate() {
+            let faculty_values: Vec<String> = faculty_headers
+                .iter()
+                .map(|label| faculty.identifiers.get(label).cloned().unwrap_or_default())
+                .collect();
+            let similarity = faculty.similarity;
             let student_rank = faculty
                 .student_rank_for_faculty
-                .map(|value| {
-                    if let Some(total) = faculty.student_rank_total {
-                        format!("#{value} of {total}")
-                    } else {
-                        format!("#{value}")
-                    }
+                .map(|value| (value, faculty.student_rank_total));
+            let student_rank_text = student_rank
+                .map(|(position, total)| match total {
+                    Some(limit) => format!("{position} of {limit}"),
+                    None => position.to_string(),
                 })
                 .unwrap_or_default();
-            let mut row = vec![
-                result.identifier.clone(),
-                (rank + 1).to_string(),
-                student_rank,
-                format_similarity_percent(faculty.similarity),
-            ];
-            for label in &index.identifier_columns {
-                row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());
+
+            let mut preview_row = Vec::new();
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            preview_row.push(result.identifier.clone());
+            preview_row.extend(faculty_values.clone());
+            preview_row.push(format_similarity_percent(similarity));
+            preview_row.push(student_rank_text);
+            preview_row.push((rank + 1).to_string());
+            if preview_rows.len() < 20 {
+                preview_rows.push(preview_row);
             }
-            rows.push(row);
+
+            match_entries.push(MatchEntry {
+                student_values: vec![result.identifier.clone()],
+                faculty_values,
+                similarity: Some(similarity),
+                student_rank,
+                faculty_rank: Some(rank + 1),
+            });
         }
     }
 
-    let preview_rows: Vec<Vec<String>> = rows.iter().take(20).cloned().collect();
     let preview = SpreadsheetPreview {
         headers: headers.clone(),
         rows: preview_rows,
@@ -1309,33 +1337,25 @@ fn process_directory_documents(
         suggested_identifier_columns: Vec::new(),
     };
 
-    let mut writer = csv::WriterBuilder::new()
-        .delimiter(b'\t')
-        .from_writer(Vec::new());
-    writer
-        .write_record(headers.iter())
-        .map_err(|err| format!("Unable to write the directory match header row: {err}"))?;
-    for row in &rows {
-        writer
-            .write_record(row.iter())
-            .map_err(|err| format!("Unable to write a directory match row: {err}"))?;
-    }
-    let tsv_bytes = writer
-        .into_inner()
-        .map_err(|err| format!("Unable to finalize the directory match spreadsheet: {err}"))?;
-    let tsv_content = String::from_utf8(tsv_bytes)
-        .map_err(|err| format!("The directory match spreadsheet contained invalid UTF-8: {err}"))?;
+    let workbook_bytes = build_matches_workbook(
+        &student_headers,
+        &student_summary_rows,
+        &faculty_headers,
+        &match_entries,
+    )?;
+    let encoded_workbook = Base64Engine.encode(workbook_bytes);
 
     let results = DirectoryMatchResults {
         processed_documents,
         matched_documents,
         skipped_documents,
-        total_rows: rows.len(),
+        total_rows: match_entries.len(),
         preview,
         spreadsheet: GeneratedSpreadsheet {
-            filename: default_directory_spreadsheet_name(),
-            mime_type: "text/tab-separated-values".into(),
-            content: tsv_content,
+            filename: default_directory_workbook_name(),
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+            content: encoded_workbook,
+            encoding: Some("base64".into()),
         },
     };
 
@@ -1562,7 +1582,7 @@ fn process_prompt_spreadsheet(
         .filter(|result| !result.matches.is_empty())
         .count();
 
-    let mut headers: Vec<String> = if include_row_number_column {
+    let student_headers: Vec<String> = if include_row_number_column {
         vec!["Row Number".into()]
     } else {
         identifier_columns
@@ -1570,52 +1590,71 @@ fn process_prompt_spreadsheet(
             .map(|label| label.trim().to_string())
             .collect()
     };
-    headers.push("Faculty rank".into());
-    headers.push("Student rank".into());
-    headers.push("Similarity".into());
-    headers.extend(index.identifier_columns.clone());
+    let faculty_headers: Vec<String> = index.identifier_columns.clone();
 
-    let mut output_rows = Vec::new();
+    let headers = build_matches_headers(&student_headers, &faculty_headers);
+
+    let mut match_entries: Vec<MatchEntry> = Vec::new();
+    let mut preview_rows: Vec<Vec<String>> = Vec::new();
+
     for result in &row_results {
         if result.matches.is_empty() {
             let message = result
                 .status_message
                 .clone()
                 .unwrap_or_else(|| "No faculty matches were returned.".into());
-            let mut row = result.identifier_values.clone();
-            row.push(String::new());
-            row.push(String::new());
-            row.push(message);
-            for _ in &index.identifier_columns {
-                row.push(String::new());
+            let mut preview_row = Vec::new();
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            preview_row.extend(result.identifier_values.clone());
+            preview_row.extend(vec![String::new(); faculty_headers.len()]);
+            preview_row.push(message.clone());
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            if preview_rows.len() < 20 {
+                preview_rows.push(preview_row);
             }
-            output_rows.push(row);
             continue;
         }
 
         for (rank, faculty) in result.matches.iter().enumerate() {
-            let mut row = result.identifier_values.clone();
-            row.push((rank + 1).to_string());
+            let faculty_values: Vec<String> = faculty_headers
+                .iter()
+                .map(|label| faculty.identifiers.get(label).cloned().unwrap_or_default())
+                .collect();
+            let similarity = faculty.similarity;
             let student_rank = faculty
                 .student_rank_for_faculty
-                .map(|value| {
-                    if let Some(total) = faculty.student_rank_total {
-                        format!("#{value} of {total}")
-                    } else {
-                        format!("#{value}")
-                    }
+                .map(|value| (value, faculty.student_rank_total));
+            let student_rank_text = student_rank
+                .map(|(position, total)| match total {
+                    Some(limit) => format!("{position} of {limit}"),
+                    None => position.to_string(),
                 })
                 .unwrap_or_default();
-            row.push(student_rank);
-            row.push(format_similarity_percent(faculty.similarity));
-            for label in &index.identifier_columns {
-                row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());
+
+            let mut preview_row = Vec::new();
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            preview_row.extend(result.identifier_values.clone());
+            preview_row.extend(faculty_values.clone());
+            preview_row.push(format_similarity_percent(similarity));
+            preview_row.push(student_rank_text.clone());
+            preview_row.push((rank + 1).to_string());
+            if preview_rows.len() < 20 {
+                preview_rows.push(preview_row);
             }
-            output_rows.push(row);
+
+            match_entries.push(MatchEntry {
+                student_values: result.identifier_values.clone(),
+                faculty_values,
+                similarity: Some(similarity),
+                student_rank,
+                faculty_rank: Some(rank + 1),
+            });
         }
     }
 
-    let preview_rows: Vec<Vec<String>> = output_rows.iter().take(20).cloned().collect();
     let preview = SpreadsheetPreview {
         headers: headers.clone(),
         rows: preview_rows,
@@ -1623,34 +1662,29 @@ fn process_prompt_spreadsheet(
         suggested_identifier_columns: Vec::new(),
     };
 
-    let mut writer = csv::WriterBuilder::new()
-        .delimiter(b'\t')
-        .from_writer(Vec::new());
-    writer
-        .write_record(headers.iter())
-        .map_err(|err| format!("Unable to write the spreadsheet match header row: {err}"))?;
-    for row in &output_rows {
-        writer
-            .write_record(row.iter())
-            .map_err(|err| format!("Unable to write a spreadsheet match row: {err}"))?;
-    }
-    let tsv_bytes = writer
-        .into_inner()
-        .map_err(|err| format!("Unable to finalize the spreadsheet match spreadsheet: {err}"))?;
-    let tsv_content = String::from_utf8(tsv_bytes).map_err(|err| {
-        format!("The spreadsheet match spreadsheet contained invalid UTF-8: {err}")
-    })?;
+    let student_summary_rows: Vec<Vec<String>> = row_results
+        .iter()
+        .map(|result| result.identifier_values.clone())
+        .collect();
+    let workbook_bytes = build_matches_workbook(
+        &student_headers,
+        &student_summary_rows,
+        &faculty_headers,
+        &match_entries,
+    )?;
+    let encoded_workbook = Base64Engine.encode(workbook_bytes);
 
     let results = SpreadsheetMatchResults {
         processed_rows,
         matched_rows,
         skipped_rows,
-        total_rows: output_rows.len(),
+        total_rows: match_entries.len(),
         preview,
         spreadsheet: GeneratedSpreadsheet {
-            filename: default_directory_spreadsheet_name(),
-            mime_type: "text/tab-separated-values".into(),
-            content: tsv_content,
+            filename: default_matches_workbook_name(),
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+            content: encoded_workbook,
+            encoding: Some("base64".into()),
         },
     };
 
@@ -1661,9 +1695,374 @@ fn process_prompt_spreadsheet(
     })
 }
 
-fn default_directory_spreadsheet_name() -> String {
+fn build_matches_headers(student_headers: &[String], faculty_headers: &[String]) -> Vec<String> {
+    let mut headers: Vec<String> = Vec::new();
+    headers.push("First reviewer".into());
+    headers.push("Reviewer".into());
+    headers.extend(student_headers.iter().cloned());
+    headers.extend(faculty_headers.iter().cloned());
+    headers.push("Similarity %".into());
+    headers.push("Student rank".into());
+    headers.push("Faculty rank".into());
+    headers
+}
+
+fn build_matches_workbook(
+    student_headers: &[String],
+    student_summary_rows: &[Vec<String>],
+    faculty_headers: &[String],
+    match_entries: &[MatchEntry],
+) -> Result<Vec<u8>, String> {
+    let mut workbook = Workbook::new();
+    let matches_sheet_name = "Matches";
+    let mut matches_sheet = workbook.add_worksheet();
+    matches_sheet
+        .set_name(matches_sheet_name)
+        .map_err(|err| format!("Unable to configure the matches worksheet: {err}"))?;
+
+    let header_format = Format::new().set_bold();
+    let percent_format = Format::new().set_num_format("0.0%");
+
+    let headers = build_matches_headers(student_headers, faculty_headers);
+    for (col_index, header) in headers.iter().enumerate() {
+        matches_sheet
+            .write_string_with_format(0, col_index as u16, header, &header_format)
+            .map_err(|err| format!("Unable to write the matches header row: {err}"))?;
+    }
+
+    let student_offset = 2u32;
+    let faculty_offset = student_offset + student_headers.len() as u32;
+    let similarity_col = faculty_offset + faculty_headers.len() as u32;
+    let student_rank_col = similarity_col + 1;
+    let faculty_rank_col = student_rank_col + 1;
+
+    for (row_index, entry) in match_entries.iter().enumerate() {
+        let row = (row_index + 1) as u32;
+        matches_sheet
+            .write_string(row, 0, "")
+            .map_err(|err| format!("Unable to write the first reviewer column: {err}"))?;
+        matches_sheet
+            .write_string(row, 1, "")
+            .map_err(|err| format!("Unable to write the reviewer column: {err}"))?;
+
+        for (offset, value) in entry.student_values.iter().enumerate() {
+            matches_sheet
+                .write_string(row, (student_offset + offset as u32) as u16, value)
+                .map_err(|err| format!("Unable to write a student identifier value: {err}"))?;
+        }
+
+        for (offset, value) in entry.faculty_values.iter().enumerate() {
+            matches_sheet
+                .write_string(row, (faculty_offset + offset as u32) as u16, value)
+                .map_err(|err| format!("Unable to write a faculty identifier value: {err}"))?;
+        }
+
+        if let Some(value) = entry.similarity {
+            matches_sheet
+                .write_number_with_format(
+                    row,
+                    similarity_col as u16,
+                    f64::from(value),
+                    &percent_format,
+                )
+                .map_err(|err| format!("Unable to write the similarity percentage: {err}"))?;
+        } else {
+            matches_sheet
+                .write_string(row, similarity_col as u16, "")
+                .map_err(|err| format!("Unable to write the similarity placeholder: {err}"))?;
+        }
+
+        if let Some((position, total)) = entry.student_rank {
+            let text = match total {
+                Some(limit) => format!("{position} of {limit}"),
+                None => position.to_string(),
+            };
+            matches_sheet
+                .write_string(row, student_rank_col as u16, text)
+                .map_err(|err| format!("Unable to write the student rank: {err}"))?;
+        } else {
+            matches_sheet
+                .write_string(row, student_rank_col as u16, "")
+                .map_err(|err| format!("Unable to write the student rank placeholder: {err}"))?;
+        }
+
+        if let Some(rank) = entry.faculty_rank {
+            matches_sheet
+                .write_number(row, faculty_rank_col as u16, rank as f64)
+                .map_err(|err| format!("Unable to write the faculty rank: {err}"))?;
+        } else {
+            matches_sheet
+                .write_string(row, faculty_rank_col as u16, "")
+                .map_err(|err| format!("Unable to write the faculty rank placeholder: {err}"))?;
+        }
+    }
+
+    let match_row_count = match_entries.len() as u32;
+    let mut student_summary_headers = student_headers.to_vec();
+    student_summary_headers.push("Total first reviewers".into());
+    student_summary_headers.push("Total reviewers".into());
+
+    let mut student_summary_sheet = workbook.add_worksheet();
+    student_summary_sheet
+        .set_name("Student Summary")
+        .map_err(|err| format!("Unable to configure the student summary worksheet: {err}"))?;
+    for (col_index, header) in student_summary_headers.iter().enumerate() {
+        student_summary_sheet
+            .write_string_with_format(0, col_index as u16, header, &header_format)
+            .map_err(|err| format!("Unable to write the student summary header row: {err}"))?;
+    }
+
+    let first_reviewer_range = if match_row_count > 0 {
+        Some(excel_range_reference(
+            matches_sheet_name,
+            1,
+            0,
+            match_row_count,
+            0,
+        ))
+    } else {
+        None
+    };
+    let reviewer_range = if match_row_count > 0 {
+        Some(excel_range_reference(
+            matches_sheet_name,
+            1,
+            1,
+            match_row_count,
+            1,
+        ))
+    } else {
+        None
+    };
+
+    for (row_index, identifiers) in student_summary_rows.iter().enumerate() {
+        let row = (row_index + 1) as u32;
+        for (col_offset, value) in identifiers.iter().enumerate() {
+            student_summary_sheet
+                .write_string(row, col_offset as u16, value)
+                .map_err(|err| {
+                    format!("Unable to write a student summary identifier value: {err}")
+                })?;
+        }
+
+        let first_col = student_headers.len();
+        let total_col = first_col + 1;
+
+        if match_row_count == 0 {
+            student_summary_sheet
+                .write_number(row, first_col as u16, 0.0)
+                .map_err(|err| {
+                    format!("Unable to write the student first reviewer placeholder: {err}")
+                })?;
+            student_summary_sheet
+                .write_number(row, total_col as u16, 0.0)
+                .map_err(|err| {
+                    format!("Unable to write the student reviewer count placeholder: {err}")
+                })?;
+            continue;
+        }
+
+        let mut first_factors = Vec::new();
+        first_factors.push(format!(
+            "--({first}=1)",
+            first = first_reviewer_range.as_ref().unwrap()
+        ));
+        for (col_offset, _) in student_headers.iter().enumerate() {
+            let student_range = excel_range_reference(
+                matches_sheet_name,
+                1,
+                student_offset + col_offset as u32,
+                match_row_count,
+                student_offset + col_offset as u32,
+            );
+            let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
+            first_factors.push(format!("--({student_range}={summary_cell})"));
+        }
+        let first_formula = build_sumproduct_formula(&first_factors);
+        student_summary_sheet
+            .write_formula(row, first_col as u16, first_formula.as_str())
+            .map_err(|err| format!("Unable to write the student first reviewer formula: {err}"))?;
+
+        let mut total_factors = Vec::new();
+        total_factors.push(format!(
+            "--((( {first}=1)+({reviewer}=1))>0)",
+            first = first_reviewer_range.as_ref().unwrap(),
+            reviewer = reviewer_range.as_ref().unwrap()
+        ));
+        for (col_offset, _) in student_headers.iter().enumerate() {
+            let student_range = excel_range_reference(
+                matches_sheet_name,
+                1,
+                student_offset + col_offset as u32,
+                match_row_count,
+                student_offset + col_offset as u32,
+            );
+            let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
+            total_factors.push(format!("--({student_range}={summary_cell})"));
+        }
+        let total_formula = build_sumproduct_formula(&total_factors);
+        student_summary_sheet
+            .write_formula(row, total_col as u16, total_formula.as_str())
+            .map_err(|err| format!("Unable to write the student reviewer count formula: {err}"))?;
+    }
+
+    let mut faculty_summary_headers = faculty_headers.to_vec();
+    faculty_summary_headers.push("First reviewer count".into());
+    faculty_summary_headers.push("Total reviewer count".into());
+
+    let mut faculty_summary_sheet = workbook.add_worksheet();
+    faculty_summary_sheet
+        .set_name("Faculty Summary")
+        .map_err(|err| format!("Unable to configure the faculty summary worksheet: {err}"))?;
+    for (col_index, header) in faculty_summary_headers.iter().enumerate() {
+        faculty_summary_sheet
+            .write_string_with_format(0, col_index as u16, header, &header_format)
+            .map_err(|err| format!("Unable to write the faculty summary header row: {err}"))?;
+    }
+
+    let mut seen_faculty = HashSet::new();
+    let mut faculty_summary_rows: Vec<Vec<String>> = Vec::new();
+    for entry in match_entries {
+        if entry.faculty_rank.is_none() {
+            continue;
+        }
+        let key = entry.faculty_values.join("\u{1f}");
+        if seen_faculty.insert(key) {
+            faculty_summary_rows.push(entry.faculty_values.clone());
+        }
+    }
+
+    for (row_index, identifiers) in faculty_summary_rows.iter().enumerate() {
+        let row = (row_index + 1) as u32;
+        for (col_offset, value) in identifiers.iter().enumerate() {
+            faculty_summary_sheet
+                .write_string(row, col_offset as u16, value)
+                .map_err(|err| {
+                    format!("Unable to write a faculty summary identifier value: {err}")
+                })?;
+        }
+
+        let first_col = faculty_headers.len();
+        let total_col = first_col + 1;
+
+        if match_row_count == 0 {
+            faculty_summary_sheet
+                .write_number(row, first_col as u16, 0.0)
+                .map_err(|err| {
+                    format!("Unable to write the faculty first reviewer placeholder: {err}")
+                })?;
+            faculty_summary_sheet
+                .write_number(row, total_col as u16, 0.0)
+                .map_err(|err| {
+                    format!("Unable to write the faculty reviewer placeholder: {err}")
+                })?;
+            continue;
+        }
+
+        let mut first_factors = Vec::new();
+        first_factors.push(format!(
+            "--({first}=1)",
+            first = first_reviewer_range.as_ref().unwrap()
+        ));
+        for (col_offset, _) in faculty_headers.iter().enumerate() {
+            let faculty_range = excel_range_reference(
+                matches_sheet_name,
+                1,
+                faculty_offset + col_offset as u32,
+                match_row_count,
+                faculty_offset + col_offset as u32,
+            );
+            let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
+            first_factors.push(format!("--({faculty_range}={summary_cell})"));
+        }
+        let first_formula = build_sumproduct_formula(&first_factors);
+        faculty_summary_sheet
+            .write_formula(row, first_col as u16, first_formula.as_str())
+            .map_err(|err| format!("Unable to write the faculty first reviewer formula: {err}"))?;
+
+        let mut total_factors = Vec::new();
+        total_factors.push(format!(
+            "--((( {first}=1)+({reviewer}=1))>0)",
+            first = first_reviewer_range.as_ref().unwrap(),
+            reviewer = reviewer_range.as_ref().unwrap()
+        ));
+        for (col_offset, _) in faculty_headers.iter().enumerate() {
+            let faculty_range = excel_range_reference(
+                matches_sheet_name,
+                1,
+                faculty_offset + col_offset as u32,
+                match_row_count,
+                faculty_offset + col_offset as u32,
+            );
+            let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
+            total_factors.push(format!("--({faculty_range}={summary_cell})"));
+        }
+        let total_formula = build_sumproduct_formula(&total_factors);
+        faculty_summary_sheet
+            .write_formula(row, total_col as u16, total_formula.as_str())
+            .map_err(|err| format!("Unable to write the faculty reviewer formula: {err}"))?;
+    }
+
+    workbook
+        .save_to_buffer()
+        .map_err(|err| format!("Unable to finalize the match workbook: {err}"))
+}
+
+fn build_sumproduct_formula(factors: &[String]) -> String {
+    if factors.is_empty() {
+        "=0".into()
+    } else {
+        format!("=SUMPRODUCT({})", factors.join(", "))
+    }
+}
+
+fn excel_column_name(mut index: u32) -> String {
+    let mut name = String::new();
+    loop {
+        let remainder = index % 26;
+        name.push((b'A' + remainder as u8) as char);
+        if index < 26 {
+            break;
+        }
+        index = index / 26 - 1;
+    }
+    name.chars().rev().collect()
+}
+
+fn excel_cell_reference(row: u32, col: u32, absolute_col: bool, absolute_row: bool) -> String {
+    let mut reference = String::new();
+    if absolute_col {
+        reference.push('$');
+    }
+    reference.push_str(&excel_column_name(col));
+    if absolute_row {
+        reference.push('$');
+    }
+    reference.push_str(&(row + 1).to_string());
+    reference
+}
+
+fn excel_range_reference(
+    sheet: &str,
+    start_row: u32,
+    start_col: u32,
+    end_row: u32,
+    end_col: u32,
+) -> String {
+    let escaped_sheet = sheet.replace('\'', "''");
+    let start = excel_cell_reference(start_row, start_col, true, true);
+    let end = excel_cell_reference(end_row, end_col, true, true);
+    format!("'{}'!{}:{}", escaped_sheet, start, end)
+}
+
+fn default_matches_workbook_name() -> String {
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    format!("DBBS_matches_{timestamp}.tsv")
+    format!("DBBS_matches_{timestamp}.xlsx")
+}
+
+fn default_directory_workbook_name() -> String {
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    format!("DBBS_directory_matches_{timestamp}.xlsx")
 }
 
 fn format_similarity_percent(value: f32) -> String {
@@ -3034,7 +3433,11 @@ fn restore_default_faculty_dataset(
 }
 
 #[tauri::command]
-fn save_generated_spreadsheet(path: String, content: String) -> Result<(), String> {
+fn save_generated_spreadsheet(
+    path: String,
+    content: String,
+    encoding: Option<String>,
+) -> Result<(), String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("Select a location to save the generated spreadsheet.".into());
@@ -3047,7 +3450,18 @@ fn save_generated_spreadsheet(path: String, content: String) -> Result<(), Strin
         }
     }
 
-    fs::write(&destination, content.as_bytes())
+    let data = match encoding
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("base64") => Base64Engine
+            .decode(content.as_bytes())
+            .map_err(|err| format!("Unable to decode the generated spreadsheet: {err}"))?,
+        _ => content.into_bytes(),
+    };
+
+    fs::write(&destination, data)
         .map_err(|err| format!("Unable to save the generated spreadsheet: {err}"))?;
 
     Ok(())

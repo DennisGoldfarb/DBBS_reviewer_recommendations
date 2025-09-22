@@ -26,6 +26,7 @@ interface GeneratedSpreadsheet {
   filename: string;
   mimeType: string;
   content: string;
+  encoding?: "utf8" | "base64";
 }
 
 interface DirectoryMatchResults {
@@ -1214,6 +1215,7 @@ function App() {
         await invoke("save_generated_spreadsheet", {
           path: selectedPath,
           content: spreadsheet.content,
+          encoding: spreadsheet.encoding ?? null,
         });
 
         setError(null);
