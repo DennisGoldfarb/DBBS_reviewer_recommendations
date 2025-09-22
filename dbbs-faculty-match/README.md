@@ -44,12 +44,15 @@ referenced files and directories exist before the matching backend is wired in.
 
 The `prepare-python` script creates an isolated virtual environment under
 `src-tauri/resources/python/<platform>-<arch>` and installs the packages needed
-to generate embeddings (`torch`, `transformers`, and their dependencies). The
-runtime currently pins `torch==2.2.2` and `transformers==4.56.2`, the newest
-versions that ship wheels for every platform we target with Python 3.11. The
-Tauri bundler copies these resources into the platform-specific installer so
-users do not need a system-wide Python installation. When bundled, the runtime lives
-under `<install dir>/resources/python/<platform>-<arch>`, allowing the Windows build to
+to generate embeddings (`torch`, `transformers`, and their dependencies). After
+installation it rewrites the generated `pyvenv.cfg` so the environment's `home`
+entry points back to the bundled runtime, keeping the interpreter relocatable in
+the packaged installer. The runtime currently pins `torch==2.2.2` and
+`transformers==4.56.2`, the newest versions that ship wheels for every platform
+we target with Python 3.11. The Tauri bundler copies these resources into the
+platform-specific installer so users do not need a system-wide Python
+installation. When bundled, the runtime lives under
+`<install dir>/resources/python/<platform>-<arch>`, allowing the Windows build to
 expose `<install dir>/resources/python/<platform>-<arch>/Scripts/python.exe` for the
 Rust backend.
 

@@ -104,10 +104,11 @@ function pruneBundledRuntime(rootDir) {
 
 const requirementsHash = hashFile(requirementsPath);
 let reuseExisting = false;
+let metadata = null;
 
 if (fs.existsSync(metadataPath)) {
   try {
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+    metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     if (
       metadata.requirementsHash === requirementsHash &&
       typeof metadata.pythonVersion === 'string' &&
@@ -181,7 +182,7 @@ function findPythonCandidate() {
 
 function resolveRuntimePython(runtimePath) {
   const candidates = process.platform === 'win32'
-    ? [path.join(runtimePath, 'Scripts', 'python.exe'), path.join(runtimePath, 'Scripts', 'python')] 
+    ? [path.join(runtimePath, 'Scripts', 'python.exe'), path.join(runtimePath, 'Scripts', 'python')]
     : [path.join(runtimePath, 'bin', 'python3'), path.join(runtimePath, 'bin', 'python')];
 
   for (const candidate of candidates) {
@@ -192,6 +193,95 @@ function resolveRuntimePython(runtimePath) {
 
   return null;
 }
+
+function determinePythonVersion(pythonExecutable) {
+  const result = spawnSync(
+    pythonExecutable,
+    ['-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))'],
+    {
+      stdio: ['ignore', 'pipe', 'inherit']
+    }
+  );
+
+  if (result.status !== 0) {
+    fail('Unable to determine the Python version for the bundled runtime.');
+  }
+
+  return result.stdout?.toString().trim();
+}
+
+function rewritePyVenvCfg(runtimePath, pythonVersion) {
+  const cfgPath = path.join(runtimePath, 'pyvenv.cfg');
+
+  if (!fs.existsSync(cfgPath)) {
+    console.warn(`\u26a0\ufe0f pyvenv.cfg was not found at ${cfgPath}.`);
+    return;
+  }
+
+  const lines = fs.readFileSync(cfgPath, 'utf8').split(/\r?\n/);
+  const entries = new Map();
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex === -1) {
+      continue;
+    }
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = trimmed.slice(separatorIndex + 1).trim();
+    entries.set(key.toLowerCase(), { key, value });
+  }
+
+  const setEntry = (key, value) => {
+    const lower = key.toLowerCase();
+    const existing = entries.get(lower);
+    const canonical = existing?.key ?? key;
+    entries.set(lower, { key: canonical, value });
+  };
+
+  const deleteEntry = (key) => {
+    entries.delete(key.toLowerCase());
+  };
+
+  setEntry('home', '.');
+  if (!entries.has('include-system-site-packages')) {
+    setEntry('include-system-site-packages', 'false');
+  }
+  if (pythonVersion) {
+    setEntry('version', pythonVersion);
+  }
+
+  deleteEntry('executable');
+  deleteEntry('command');
+
+  const preferredOrder = ['home', 'include-system-site-packages', 'version'];
+  const handled = new Set();
+  const output = [];
+
+  for (const key of preferredOrder) {
+    const entry = entries.get(key);
+    if (entry) {
+      output.push(`${entry.key} = ${entry.value}`);
+      handled.add(key);
+    }
+  }
+
+  const remaining = [...entries.entries()]
+    .filter(([key]) => !handled.has(key))
+    .sort((a, b) => a[1].key.localeCompare(b[1].key));
+
+  for (const [, entry] of remaining) {
+    output.push(`${entry.key} = ${entry.value}`);
+  }
+
+  fs.writeFileSync(cfgPath, `${output.join('\n')}\n`);
+  console.log('\u2139\ufe0f Updated pyvenv.cfg to use a relocatable home path.');
+}
+
+let runtimePython;
 
 if (!reuseExisting) {
   ensureDirectory(pythonRootDir);
@@ -210,7 +300,7 @@ if (!reuseExisting) {
 
   runCommand(python.command, [...python.args, '-m', 'venv', runtimeDir]);
 
-  const runtimePython = resolveRuntimePython(runtimeDir);
+  runtimePython = resolveRuntimePython(runtimeDir);
   if (!runtimePython) {
     fail(`Virtual environment creation succeeded but no interpreter was found in ${runtimeDir}.`);
   }
@@ -219,26 +309,36 @@ if (!reuseExisting) {
   runCommand(runtimePython, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel']);
   runCommand(runtimePython, ['-m', 'pip', 'install', '--no-cache-dir', '-r', requirementsPath]);
 
-  const versionResult = spawnSync(
-    runtimePython,
-    ['-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))'],
-    {
-      stdio: ['ignore', 'pipe', 'inherit']
-    }
-  );
-  if (versionResult.status !== 0) {
-    fail('Unable to determine the Python version for the bundled runtime.');
-  }
-
-  const metadata = {
+  const pythonVersion = determinePythonVersion(runtimePython);
+  const timestamp = new Date().toISOString();
+  metadata = {
     requirementsHash,
-    createdAt: new Date().toISOString(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
     platform,
     arch,
-    pythonVersion: versionResult.stdout?.toString().trim()
+    pythonVersion,
+    pyvenvRelocatable: true
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   console.log(`\u2705 Bundled Python runtime prepared for ${runtimeDirName}.`);
+  rewritePyVenvCfg(runtimeDir, pythonVersion);
+} else {
+  runtimePython = resolveRuntimePython(runtimeDir);
+  if (!runtimePython) {
+    fail(
+      `Runtime metadata exists at ${metadataPath} but the interpreter directory is missing from ${runtimeDir}.`
+    );
+  }
+
+  const pythonVersion = determinePythonVersion(runtimePython);
+  if (metadata) {
+    metadata.pythonVersion = pythonVersion;
+    metadata.updatedAt = new Date().toISOString();
+    metadata.pyvenvRelocatable = true;
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+  }
+  rewritePyVenvCfg(runtimeDir, pythonVersion);
 }
 
 if (fs.existsSync(runtimeDir)) {
