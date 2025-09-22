@@ -22,10 +22,8 @@ jobs:
         include:
           - os: windows-latest
             artifact-suffix: windows_x64
-          - os: macos-13
-            artifact-suffix: macos_x64
           - os: macos-latest
-            artifact-suffix: macos_arm64
+            artifact-suffix: macos
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -205,10 +203,8 @@ jobs:
         include:
           - os: windows-latest
             artifact-suffix: windows_x64
-          - os: macos-13
-            artifact-suffix: macos_x64
           - os: macos-latest
-            artifact-suffix: macos_arm64
+            artifact-suffix: macos
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -430,25 +426,9 @@ jobs:
 
             upload_artifact "$artifact_path"
           elif [[ "${RUNNER_OS:-}" == "macOS" ]]; then
-            declare -a candidate_dirs=(
-              "dbbs-faculty-match/src-tauri/target/release/bundle/dmg"
-            )
-
-            if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-              candidate_dirs=("${CARGO_TARGET_DIR}/release/bundle/dmg" "${candidate_dirs[@]}")
-            fi
-
-            artifact_path=""
-            for dir in "${candidate_dirs[@]}"; do
-              candidate="$dir/${artifact_base}.dmg"
-              if [[ -f "$candidate" ]]; then
-                artifact_path="$candidate"
-                break
-              fi
-            done
-
-            if [[ -z "$artifact_path" ]]; then
-              echo "Renamed macOS disk image ${artifact_base}.dmg not found in: ${candidate_dirs[*]}" >&2
+            artifact_path="dbbs-faculty-match/src-tauri/target/release/bundle/dmg/${artifact_base}.dmg"
+            if [[ ! -f "$artifact_path" ]]; then
+              echo "Renamed macOS disk image ${artifact_base}.dmg not found in dbbs-faculty-match/src-tauri/target/release/bundle/dmg" >&2
               exit 1
             fi
 
