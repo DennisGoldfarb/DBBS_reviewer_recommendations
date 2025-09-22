@@ -1593,7 +1593,6 @@ fn process_prompt_spreadsheet(
         similarity: Option<f32>,
         student_rank: Option<(usize, Option<usize>)>,
         faculty_rank: Option<usize>,
-        status_message: Option<String>,
     }
 
     let mut match_entries: Vec<MatchEntry> = Vec::new();
@@ -1616,14 +1615,6 @@ fn process_prompt_spreadsheet(
             if preview_rows.len() < 20 {
                 preview_rows.push(preview_row);
             }
-            match_entries.push(MatchEntry {
-                student_values: result.identifier_values.clone(),
-                faculty_values: vec![String::new(); faculty_headers.len()],
-                similarity: None,
-                student_rank: None,
-                faculty_rank: None,
-                status_message: Some(message),
-            });
             continue;
         }
 
@@ -1661,7 +1652,6 @@ fn process_prompt_spreadsheet(
                 similarity: Some(similarity),
                 student_rank,
                 faculty_rank: Some(rank + 1),
-                status_message: None,
             });
         }
     }
@@ -1715,27 +1705,15 @@ fn process_prompt_spreadsheet(
                 .map_err(|err| format!("Unable to write a faculty identifier value: {err}"))?;
         }
 
-        match (&entry.similarity, &entry.status_message) {
-            (Some(value), _) => {
-                matches_sheet
-                    .write_number_with_format(
-                        row,
-                        similarity_col as u16,
-                        f64::from(*value),
-                        &percent_format,
-                    )
-                    .map_err(|err| format!("Unable to write the similarity percentage: {err}"))?;
-            }
-            (None, Some(message)) => {
-                matches_sheet
-                    .write_string(row, similarity_col as u16, message)
-                    .map_err(|err| format!("Unable to write the match status message: {err}"))?;
-            }
-            _ => {
-                matches_sheet
-                    .write_string(row, similarity_col as u16, "")
-                    .map_err(|err| format!("Unable to write the similarity placeholder: {err}"))?;
-            }
+        if let Some(value) = entry.similarity {
+            matches_sheet
+                .write_number_with_format(
+                    row,
+                    similarity_col as u16,
+                    f64::from(value),
+                    &percent_format,
+                )
+                .map_err(|err| format!("Unable to write the similarity percentage: {err}"))?;
         }
 
         if let Some((position, total)) = entry.student_rank {
@@ -1766,8 +1744,8 @@ fn process_prompt_spreadsheet(
     let match_row_count = match_entries.len() as u32;
     let student_summary_headers = {
         let mut values = student_headers.clone();
-        values.push("Total reviewers".into());
         values.push("Total first reviewers".into());
+        values.push("Total reviewers".into());
         values
     };
     let mut student_summary_sheet = workbook.add_worksheet();
@@ -1816,21 +1794,42 @@ fn process_prompt_spreadsheet(
                 })?;
         }
 
-        let total_col = student_headers.len();
-        let first_col = total_col + 1;
+        let first_col = student_headers.len();
+        let total_col = first_col + 1;
         if match_row_count == 0 {
-            student_summary_sheet
-                .write_number(row, total_col as u16, 0.0)
-                .map_err(|err| {
-                    format!("Unable to write the student reviewer count placeholder: {err}")
-                })?;
             student_summary_sheet
                 .write_number(row, first_col as u16, 0.0)
                 .map_err(|err| {
                     format!("Unable to write the student first reviewer placeholder: {err}")
                 })?;
+            student_summary_sheet
+                .write_number(row, total_col as u16, 0.0)
+                .map_err(|err| {
+                    format!("Unable to write the student reviewer count placeholder: {err}")
+                })?;
             continue;
         }
+
+        let mut first_factors = Vec::new();
+        first_factors.push(format!(
+            "--({first}=1)",
+            first = first_reviewer_range.as_ref().unwrap()
+        ));
+        for (col_offset, _) in student_headers.iter().enumerate() {
+            let student_range = excel_range_reference(
+                matches_sheet_name,
+                1,
+                student_offset + col_offset as u32,
+                match_row_count,
+                student_offset + col_offset as u32,
+            );
+            let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
+            first_factors.push(format!("--({student_range}={summary_cell})"));
+        }
+        let first_formula = build_sumproduct_formula(&first_factors);
+        student_summary_sheet
+            .write_formula(row, first_col as u16, first_formula.as_str())
+            .map_err(|err| format!("Unable to write the student first reviewer formula: {err}"))?;
 
         let mut total_factors = Vec::new();
         total_factors.push(format!(
@@ -1853,27 +1852,6 @@ fn process_prompt_spreadsheet(
         student_summary_sheet
             .write_formula(row, total_col as u16, total_formula.as_str())
             .map_err(|err| format!("Unable to write the student reviewer count formula: {err}"))?;
-
-        let mut first_factors = Vec::new();
-        first_factors.push(format!(
-            "--({first}=1)",
-            first = first_reviewer_range.as_ref().unwrap()
-        ));
-        for (col_offset, _) in student_headers.iter().enumerate() {
-            let student_range = excel_range_reference(
-                matches_sheet_name,
-                1,
-                student_offset + col_offset as u32,
-                match_row_count,
-                student_offset + col_offset as u32,
-            );
-            let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
-            first_factors.push(format!("--({student_range}={summary_cell})"));
-        }
-        let first_formula = build_sumproduct_formula(&first_factors);
-        student_summary_sheet
-            .write_formula(row, first_col as u16, first_formula.as_str())
-            .map_err(|err| format!("Unable to write the student first reviewer formula: {err}"))?;
     }
 
     let mut faculty_summary_headers = faculty_headers.clone();
