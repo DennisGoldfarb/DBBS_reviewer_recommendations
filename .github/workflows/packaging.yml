@@ -376,34 +376,84 @@ jobs:
           RELEASE_TAG: ${{ needs.create-release.outputs.release-tag }}
         run: |
           set -euo pipefail
-          bundle_dirs=()
-          if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
-            bundle_dir="${CARGO_TARGET_DIR}/release/bundle"
+
+          slug='${{ steps.metadata.outputs.slug }}'
+          version='${{ steps.metadata.outputs.version }}'
+          suffix='${{ matrix.artifact-suffix }}'
+
+          artifact_base="${slug}_${version}_${suffix}"
+
+          upload_artifact() {
+            local path="$1"
+            if [[ -z "$path" ]]; then
+              echo "No artifact path provided" >&2
+              exit 1
+            fi
+
+            if [[ ! -f "$path" ]]; then
+              echo "Expected artifact '$path' not found" >&2
+              exit 1
+            fi
+
+            local upload_path="$path"
             if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-              bundle_dir="$(cygpath -u "$bundle_dir" 2>/dev/null || echo "$bundle_dir")"
+              upload_path="$(cygpath -w "$path" 2>/dev/null || echo "$path")"
             fi
-            bundle_dirs+=("$bundle_dir")
-          fi
 
-          default_dir='dbbs-faculty-match/src-tauri/target/release/bundle'
+            echo "Uploading $upload_path"
+            gh release upload "$RELEASE_TAG" "$upload_path" --clobber
+          }
+
           if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-            default_dir="$(cygpath -u "$default_dir" 2>/dev/null || echo "$default_dir")"
-          fi
-          bundle_dirs+=("$default_dir")
-
-          found_any=0
-          for dir in "${bundle_dirs[@]}"; do
-            if [[ ! -d "$dir" ]]; then
-              continue
+            declare -a candidate_dirs=()
+            if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+              candidate_dirs+=("${CARGO_TARGET_DIR}/release/bundle/nsis")
             fi
-            found_any=1
-            while IFS= read -r -d '' file; do
-              echo "Uploading $file"
-              gh release upload "$RELEASE_TAG" "$file" --clobber
-            done < <(find "$dir" -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.pkg' -o -name '*.app' -o -name '*.tar.gz' -o -name '*.msix' -o -name '*.json' \) -print0)
-          done
+            candidate_dirs+=("dbbs-faculty-match/src-tauri/target/release/bundle/nsis")
 
-          if [[ $found_any -eq 0 ]]; then
-            echo "Bundle directory not found. Checked: ${bundle_dirs[*]}" >&2
+            artifact_path=""
+            for dir in "${candidate_dirs[@]}"; do
+              # Normalise to a POSIX-style path so bash can inspect it.
+              posix_dir="$dir"
+              posix_dir="$(cygpath -u "$posix_dir" 2>/dev/null || echo "$posix_dir")"
+              candidate="$posix_dir/${artifact_base}.exe"
+              if [[ -f "$candidate" ]]; then
+                artifact_path="$candidate"
+                break
+              fi
+            done
+
+            if [[ -z "$artifact_path" ]]; then
+              echo "Renamed Windows installer ${artifact_base}.exe not found in: ${candidate_dirs[*]}" >&2
+              exit 1
+            fi
+
+            upload_artifact "$artifact_path"
+          elif [[ "${RUNNER_OS:-}" == "macOS" ]]; then
+            declare -a candidate_dirs=(
+              "dbbs-faculty-match/src-tauri/target/release/bundle/dmg"
+            )
+
+            if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+              candidate_dirs=("${CARGO_TARGET_DIR}/release/bundle/dmg" "${candidate_dirs[@]}")
+            fi
+
+            artifact_path=""
+            for dir in "${candidate_dirs[@]}"; do
+              candidate="$dir/${artifact_base}.dmg"
+              if [[ -f "$candidate" ]]; then
+                artifact_path="$candidate"
+                break
+              fi
+            done
+
+            if [[ -z "$artifact_path" ]]; then
+              echo "Renamed macOS disk image ${artifact_base}.dmg not found in: ${candidate_dirs[*]}" >&2
+              exit 1
+            fi
+
+            upload_artifact "$artifact_path"
+          else
+            echo "Unsupported runner OS: ${RUNNER_OS:-unknown}" >&2
             exit 1
           fi
