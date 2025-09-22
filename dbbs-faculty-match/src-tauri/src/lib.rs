@@ -1866,7 +1866,7 @@ fn process_prompt_spreadsheet(
         }
         let total_formula = build_sumproduct_formula(&total_factors);
         student_summary_sheet
-            .write_formula(row, total_col as u16, total_formula)
+            .write_formula(row, total_col as u16, total_formula.as_str())
             .map_err(|err| format!("Unable to write the student reviewer count formula: {err}"))?;
 
         let mut first_factors = Vec::new();
@@ -1887,7 +1887,7 @@ fn process_prompt_spreadsheet(
         }
         let first_formula = build_sumproduct_formula(&first_factors);
         student_summary_sheet
-            .write_formula(row, first_col as u16, first_formula)
+            .write_formula(row, first_col as u16, first_formula.as_str())
             .map_err(|err| format!("Unable to write the student first reviewer formula: {err}"))?;
 
         if faculty_headers.is_empty() {
@@ -1928,7 +1928,7 @@ fn process_prompt_spreadsheet(
                 include_expr = include_expr
             );
             student_summary_sheet
-                .write_formula(row, assigned_col as u16, faculty_formula)
+                .write_formula(row, assigned_col as u16, faculty_formula.as_str())
                 .map_err(|err| format!("Unable to write the assigned faculty formula: {err}"))?;
         }
     }
@@ -2003,7 +2003,7 @@ fn process_prompt_spreadsheet(
         }
         let first_formula = build_sumproduct_formula(&first_factors);
         faculty_summary_sheet
-            .write_formula(row, first_col as u16, first_formula)
+            .write_formula(row, first_col as u16, first_formula.as_str())
             .map_err(|err| format!("Unable to write the faculty first reviewer formula: {err}"))?;
 
         let mut total_factors = Vec::new();
@@ -2025,7 +2025,7 @@ fn process_prompt_spreadsheet(
         }
         let total_formula = build_sumproduct_formula(&total_factors);
         faculty_summary_sheet
-            .write_formula(row, total_col as u16, total_formula)
+            .write_formula(row, total_col as u16, total_formula.as_str())
             .map_err(|err| format!("Unable to write the faculty reviewer formula: {err}"))?;
     }
 
