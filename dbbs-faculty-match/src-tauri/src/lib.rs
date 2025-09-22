@@ -1801,7 +1801,6 @@ fn build_matches_workbook(
     let mut student_summary_headers = student_headers.to_vec();
     student_summary_headers.push("Total first reviewers".into());
     student_summary_headers.push("Total reviewers".into());
-    student_summary_headers.push("Assigned faculty".into());
 
     let mut student_summary_sheet = workbook.add_worksheet();
     student_summary_sheet
@@ -1848,7 +1847,6 @@ fn build_matches_workbook(
 
         let first_col = student_headers.len();
         let total_col = first_col + 1;
-        let assigned_col = total_col + 1;
 
         if match_row_count == 0 {
             student_summary_sheet
@@ -1860,11 +1858,6 @@ fn build_matches_workbook(
                 .write_number(row, total_col as u16, 0.0)
                 .map_err(|err| {
                     format!("Unable to write the student reviewer count placeholder: {err}")
-                })?;
-            student_summary_sheet
-                .write_string(row, assigned_col as u16, "")
-                .map_err(|err| {
-                    format!("Unable to write the assigned faculty placeholder: {err}")
                 })?;
             continue;
         }
@@ -1911,46 +1904,6 @@ fn build_matches_workbook(
         student_summary_sheet
             .write_formula(row, total_col as u16, total_formula.as_str())
             .map_err(|err| format!("Unable to write the student reviewer count formula: {err}"))?;
-
-        if faculty_headers.is_empty() {
-            student_summary_sheet
-                .write_string(row, assigned_col as u16, "")
-                .map_err(|err| {
-                    format!("Unable to write the assigned faculty placeholder: {err}")
-                })?;
-        } else {
-            let mut assignment_factors = Vec::new();
-            assignment_factors.push(format!(
-                "--((( {first}=1)+({reviewer}=1))>0)",
-                first = first_reviewer_range.as_ref().unwrap(),
-                reviewer = reviewer_range.as_ref().unwrap()
-            ));
-            for (col_offset, _) in student_headers.iter().enumerate() {
-                let student_range = excel_range_reference(
-                    matches_sheet_name,
-                    1,
-                    student_offset + col_offset as u32,
-                    match_row_count,
-                    student_offset + col_offset as u32,
-                );
-                let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
-                assignment_factors.push(format!("--({student_range}={summary_cell})"));
-            }
-            let assignment_condition = assignment_factors.join("*");
-            let faculty_name_range = excel_range_reference(
-                matches_sheet_name,
-                1,
-                faculty_offset,
-                match_row_count,
-                faculty_offset,
-            );
-            let assignment_formula = format!(
-                "=TEXTJOIN(\", \", TRUE, IF({assignment_condition}, {faculty_name_range}, \"\"))"
-            );
-            student_summary_sheet
-                .write_formula(row, assigned_col as u16, assignment_formula.as_str())
-                .map_err(|err| format!("Unable to write the assigned faculty formula: {err}"))?;
-        }
     }
 
     let mut faculty_summary_headers = faculty_headers.to_vec();
