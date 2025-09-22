@@ -797,6 +797,15 @@ struct SpreadsheetMatchResults {
     spreadsheet: GeneratedSpreadsheet,
 }
 
+#[derive(Debug, Clone)]
+struct MatchEntry {
+    student_values: Vec<String>,
+    faculty_values: Vec<String>,
+    similarity: Option<f32>,
+    student_rank: Option<(usize, Option<usize>)>,
+    faculty_rank: Option<usize>,
+}
+
 #[derive(Debug)]
 struct DirectoryProcessingOutcome {
     warnings: Vec<String>,
@@ -1253,59 +1262,74 @@ fn process_directory_documents(
         .filter(|result| !result.matches.is_empty())
         .count();
 
-    let mut headers = vec![
-        "Document".to_string(),
-        "Faculty rank".to_string(),
-        "Student rank".to_string(),
-        "Similarity".to_string(),
-    ];
-    headers.extend(index.identifier_columns.clone());
+    let student_headers = vec!["Document".to_string()];
+    let faculty_headers = index.identifier_columns.clone();
+    let headers = build_matches_headers(&student_headers, &faculty_headers);
 
-    let mut rows = Vec::new();
+    let mut preview_rows: Vec<Vec<String>> = Vec::new();
+    let mut match_entries: Vec<MatchEntry> = Vec::new();
+    let mut student_summary_rows: Vec<Vec<String>> = Vec::new();
+
     for result in &document_results {
+        student_summary_rows.push(vec![result.identifier.clone()]);
+
         if result.matches.is_empty() {
             let message = result
                 .status_message
                 .clone()
                 .unwrap_or_else(|| "No faculty matches were returned.".into());
-            let mut row = vec![
-                result.identifier.clone(),
-                String::new(),
-                String::new(),
-                message,
-            ];
-            for _ in &index.identifier_columns {
-                row.push(String::new());
+            let mut preview_row = Vec::new();
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            preview_row.push(result.identifier.clone());
+            preview_row.extend(vec![String::new(); faculty_headers.len()]);
+            preview_row.push(message);
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            if preview_rows.len() < 20 {
+                preview_rows.push(preview_row);
             }
-            rows.push(row);
             continue;
         }
 
         for (rank, faculty) in result.matches.iter().enumerate() {
+            let faculty_values: Vec<String> = faculty_headers
+                .iter()
+                .map(|label| faculty.identifiers.get(label).cloned().unwrap_or_default())
+                .collect();
+            let similarity = faculty.similarity;
             let student_rank = faculty
                 .student_rank_for_faculty
-                .map(|value| {
-                    if let Some(total) = faculty.student_rank_total {
-                        format!("#{value} of {total}")
-                    } else {
-                        format!("#{value}")
-                    }
+                .map(|value| (value, faculty.student_rank_total));
+            let student_rank_text = student_rank
+                .map(|(position, total)| match total {
+                    Some(limit) => format!("{position} of {limit}"),
+                    None => position.to_string(),
                 })
                 .unwrap_or_default();
-            let mut row = vec![
-                result.identifier.clone(),
-                (rank + 1).to_string(),
-                student_rank,
-                format_similarity_percent(faculty.similarity),
-            ];
-            for label in &index.identifier_columns {
-                row.push(faculty.identifiers.get(label).cloned().unwrap_or_default());
+
+            let mut preview_row = Vec::new();
+            preview_row.push(String::new());
+            preview_row.push(String::new());
+            preview_row.push(result.identifier.clone());
+            preview_row.extend(faculty_values.clone());
+            preview_row.push(format_similarity_percent(similarity));
+            preview_row.push(student_rank_text);
+            preview_row.push((rank + 1).to_string());
+            if preview_rows.len() < 20 {
+                preview_rows.push(preview_row);
             }
-            rows.push(row);
+
+            match_entries.push(MatchEntry {
+                student_values: vec![result.identifier.clone()],
+                faculty_values,
+                similarity: Some(similarity),
+                student_rank,
+                faculty_rank: Some(rank + 1),
+            });
         }
     }
 
-    let preview_rows: Vec<Vec<String>> = rows.iter().take(20).cloned().collect();
     let preview = SpreadsheetPreview {
         headers: headers.clone(),
         rows: preview_rows,
@@ -1313,34 +1337,25 @@ fn process_directory_documents(
         suggested_identifier_columns: Vec::new(),
     };
 
-    let mut writer = csv::WriterBuilder::new()
-        .delimiter(b'\t')
-        .from_writer(Vec::new());
-    writer
-        .write_record(headers.iter())
-        .map_err(|err| format!("Unable to write the directory match header row: {err}"))?;
-    for row in &rows {
-        writer
-            .write_record(row.iter())
-            .map_err(|err| format!("Unable to write a directory match row: {err}"))?;
-    }
-    let tsv_bytes = writer
-        .into_inner()
-        .map_err(|err| format!("Unable to finalize the directory match spreadsheet: {err}"))?;
-    let tsv_content = String::from_utf8(tsv_bytes)
-        .map_err(|err| format!("The directory match spreadsheet contained invalid UTF-8: {err}"))?;
+    let workbook_bytes = build_matches_workbook(
+        &student_headers,
+        &student_summary_rows,
+        &faculty_headers,
+        &match_entries,
+    )?;
+    let encoded_workbook = Base64Engine.encode(workbook_bytes);
 
     let results = DirectoryMatchResults {
         processed_documents,
         matched_documents,
         skipped_documents,
-        total_rows: rows.len(),
+        total_rows: match_entries.len(),
         preview,
         spreadsheet: GeneratedSpreadsheet {
-            filename: default_directory_spreadsheet_name(),
-            mime_type: "text/tab-separated-values".into(),
-            content: tsv_content,
-            encoding: None,
+            filename: default_directory_workbook_name(),
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+            content: encoded_workbook,
+            encoding: Some("base64".into()),
         },
     };
 
@@ -1577,23 +1592,7 @@ fn process_prompt_spreadsheet(
     };
     let faculty_headers: Vec<String> = index.identifier_columns.clone();
 
-    let mut headers: Vec<String> = Vec::new();
-    headers.push("First reviewer".into());
-    headers.push("Reviewer".into());
-    headers.extend(student_headers.clone());
-    headers.extend(faculty_headers.clone());
-    headers.push("Similarity %".into());
-    headers.push("Student rank".into());
-    headers.push("Faculty rank".into());
-
-    #[derive(Debug, Clone)]
-    struct MatchEntry {
-        student_values: Vec<String>,
-        faculty_values: Vec<String>,
-        similarity: Option<f32>,
-        student_rank: Option<(usize, Option<usize>)>,
-        faculty_rank: Option<usize>,
-    }
+    let headers = build_matches_headers(&student_headers, &faculty_headers);
 
     let mut match_entries: Vec<MatchEntry> = Vec::new();
     let mut preview_rows: Vec<Vec<String>> = Vec::new();
@@ -1663,15 +1662,68 @@ fn process_prompt_spreadsheet(
         suggested_identifier_columns: Vec::new(),
     };
 
+    let student_summary_rows: Vec<Vec<String>> = row_results
+        .iter()
+        .map(|result| result.identifier_values.clone())
+        .collect();
+    let workbook_bytes = build_matches_workbook(
+        &student_headers,
+        &student_summary_rows,
+        &faculty_headers,
+        &match_entries,
+    )?;
+    let encoded_workbook = Base64Engine.encode(workbook_bytes);
+
+    let results = SpreadsheetMatchResults {
+        processed_rows,
+        matched_rows,
+        skipped_rows,
+        total_rows: match_entries.len(),
+        preview,
+        spreadsheet: GeneratedSpreadsheet {
+            filename: default_matches_workbook_name(),
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+            content: encoded_workbook,
+            encoding: Some("base64".into()),
+        },
+    };
+
+    Ok(SpreadsheetProcessingOutcome {
+        warnings,
+        prompt_matches,
+        results,
+    })
+}
+
+fn build_matches_headers(student_headers: &[String], faculty_headers: &[String]) -> Vec<String> {
+    let mut headers: Vec<String> = Vec::new();
+    headers.push("First reviewer".into());
+    headers.push("Reviewer".into());
+    headers.extend(student_headers.iter().cloned());
+    headers.extend(faculty_headers.iter().cloned());
+    headers.push("Similarity %".into());
+    headers.push("Student rank".into());
+    headers.push("Faculty rank".into());
+    headers
+}
+
+fn build_matches_workbook(
+    student_headers: &[String],
+    student_summary_rows: &[Vec<String>],
+    faculty_headers: &[String],
+    match_entries: &[MatchEntry],
+) -> Result<Vec<u8>, String> {
     let mut workbook = Workbook::new();
     let matches_sheet_name = "Matches";
     let mut matches_sheet = workbook.add_worksheet();
     matches_sheet
         .set_name(matches_sheet_name)
         .map_err(|err| format!("Unable to configure the matches worksheet: {err}"))?;
+
     let header_format = Format::new().set_bold();
     let percent_format = Format::new().set_num_format("0.0%");
 
+    let headers = build_matches_headers(student_headers, faculty_headers);
     for (col_index, header) in headers.iter().enumerate() {
         matches_sheet
             .write_string_with_format(0, col_index as u16, header, &header_format)
@@ -1714,6 +1766,10 @@ fn process_prompt_spreadsheet(
                     &percent_format,
                 )
                 .map_err(|err| format!("Unable to write the similarity percentage: {err}"))?;
+        } else {
+            matches_sheet
+                .write_string(row, similarity_col as u16, "")
+                .map_err(|err| format!("Unable to write the similarity placeholder: {err}"))?;
         }
 
         if let Some((position, total)) = entry.student_rank {
@@ -1742,12 +1798,11 @@ fn process_prompt_spreadsheet(
     }
 
     let match_row_count = match_entries.len() as u32;
-    let student_summary_headers = {
-        let mut values = student_headers.clone();
-        values.push("Total first reviewers".into());
-        values.push("Total reviewers".into());
-        values
-    };
+    let mut student_summary_headers = student_headers.to_vec();
+    student_summary_headers.push("Total first reviewers".into());
+    student_summary_headers.push("Total reviewers".into());
+    student_summary_headers.push("Assigned faculty".into());
+
     let mut student_summary_sheet = workbook.add_worksheet();
     student_summary_sheet
         .set_name("Student Summary")
@@ -1758,10 +1813,6 @@ fn process_prompt_spreadsheet(
             .map_err(|err| format!("Unable to write the student summary header row: {err}"))?;
     }
 
-    let student_summary_rows: Vec<Vec<String>> = row_results
-        .iter()
-        .map(|result| result.identifier_values.clone())
-        .collect();
     let first_reviewer_range = if match_row_count > 0 {
         Some(excel_range_reference(
             matches_sheet_name,
@@ -1784,6 +1835,7 @@ fn process_prompt_spreadsheet(
     } else {
         None
     };
+
     for (row_index, identifiers) in student_summary_rows.iter().enumerate() {
         let row = (row_index + 1) as u32;
         for (col_offset, value) in identifiers.iter().enumerate() {
@@ -1796,6 +1848,8 @@ fn process_prompt_spreadsheet(
 
         let first_col = student_headers.len();
         let total_col = first_col + 1;
+        let assigned_col = total_col + 1;
+
         if match_row_count == 0 {
             student_summary_sheet
                 .write_number(row, first_col as u16, 0.0)
@@ -1806,6 +1860,11 @@ fn process_prompt_spreadsheet(
                 .write_number(row, total_col as u16, 0.0)
                 .map_err(|err| {
                     format!("Unable to write the student reviewer count placeholder: {err}")
+                })?;
+            student_summary_sheet
+                .write_string(row, assigned_col as u16, "")
+                .map_err(|err| {
+                    format!("Unable to write the assigned faculty placeholder: {err}")
                 })?;
             continue;
         }
@@ -1852,11 +1911,52 @@ fn process_prompt_spreadsheet(
         student_summary_sheet
             .write_formula(row, total_col as u16, total_formula.as_str())
             .map_err(|err| format!("Unable to write the student reviewer count formula: {err}"))?;
+
+        if faculty_headers.is_empty() {
+            student_summary_sheet
+                .write_string(row, assigned_col as u16, "")
+                .map_err(|err| {
+                    format!("Unable to write the assigned faculty placeholder: {err}")
+                })?;
+        } else {
+            let mut assignment_factors = Vec::new();
+            assignment_factors.push(format!(
+                "--((( {first}=1)+({reviewer}=1))>0)",
+                first = first_reviewer_range.as_ref().unwrap(),
+                reviewer = reviewer_range.as_ref().unwrap()
+            ));
+            for (col_offset, _) in student_headers.iter().enumerate() {
+                let student_range = excel_range_reference(
+                    matches_sheet_name,
+                    1,
+                    student_offset + col_offset as u32,
+                    match_row_count,
+                    student_offset + col_offset as u32,
+                );
+                let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
+                assignment_factors.push(format!("--({student_range}={summary_cell})"));
+            }
+            let assignment_condition = assignment_factors.join("*");
+            let faculty_name_range = excel_range_reference(
+                matches_sheet_name,
+                1,
+                faculty_offset,
+                match_row_count,
+                faculty_offset,
+            );
+            let assignment_formula = format!(
+                "=TEXTJOIN(\", \", TRUE, IF({assignment_condition}, {faculty_name_range}, \"\"))"
+            );
+            student_summary_sheet
+                .write_formula(row, assigned_col as u16, assignment_formula.as_str())
+                .map_err(|err| format!("Unable to write the assigned faculty formula: {err}"))?;
+        }
     }
 
-    let mut faculty_summary_headers = faculty_headers.clone();
+    let mut faculty_summary_headers = faculty_headers.to_vec();
     faculty_summary_headers.push("First reviewer count".into());
     faculty_summary_headers.push("Total reviewer count".into());
+
     let mut faculty_summary_sheet = workbook.add_worksheet();
     faculty_summary_sheet
         .set_name("Faculty Summary")
@@ -1869,7 +1969,7 @@ fn process_prompt_spreadsheet(
 
     let mut seen_faculty = HashSet::new();
     let mut faculty_summary_rows: Vec<Vec<String>> = Vec::new();
-    for entry in &match_entries {
+    for entry in match_entries {
         if entry.faculty_rank.is_none() {
             continue;
         }
@@ -1950,30 +2050,9 @@ fn process_prompt_spreadsheet(
             .map_err(|err| format!("Unable to write the faculty reviewer formula: {err}"))?;
     }
 
-    let workbook_bytes = workbook
+    workbook
         .save_to_buffer()
-        .map_err(|err| format!("Unable to finalize the spreadsheet match workbook: {err}"))?;
-    let encoded_workbook = Base64Engine.encode(workbook_bytes);
-
-    let results = SpreadsheetMatchResults {
-        processed_rows,
-        matched_rows,
-        skipped_rows,
-        total_rows: match_entries.len(),
-        preview,
-        spreadsheet: GeneratedSpreadsheet {
-            filename: default_matches_workbook_name(),
-            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
-            content: encoded_workbook,
-            encoding: Some("base64".into()),
-        },
-    };
-
-    Ok(SpreadsheetProcessingOutcome {
-        warnings,
-        prompt_matches,
-        results,
-    })
+        .map_err(|err| format!("Unable to finalize the match workbook: {err}"))
 }
 
 fn build_sumproduct_formula(factors: &[String]) -> String {
@@ -2028,9 +2107,9 @@ fn default_matches_workbook_name() -> String {
     format!("DBBS_matches_{timestamp}.xlsx")
 }
 
-fn default_directory_spreadsheet_name() -> String {
+fn default_directory_workbook_name() -> String {
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    format!("DBBS_matches_{timestamp}.tsv")
+    format!("DBBS_directory_matches_{timestamp}.xlsx")
 }
 
 fn format_similarity_percent(value: f32) -> String {
