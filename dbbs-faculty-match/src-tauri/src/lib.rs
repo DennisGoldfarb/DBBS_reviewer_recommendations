@@ -164,6 +164,7 @@ struct FacultyDatasetStatus {
     message_variant: Option<String>,
     preview: Option<SpreadsheetPreview>,
     analysis: Option<FacultyDatasetAnalysis>,
+    embedding_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2434,16 +2435,23 @@ fn emit_embedding_error(app_handle: &tauri::AppHandle, total_rows: usize, messag
 }
 
 #[tauri::command]
-async fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let result =
-        tauri::async_runtime::spawn_blocking(move || perform_faculty_embedding_refresh(app_handle))
-            .await
-            .map_err(|err| format!("Embedding refresh task failed: {err}"))?;
+async fn update_faculty_embeddings(
+    app_handle: tauri::AppHandle,
+    model: Option<String>,
+) -> Result<String, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        perform_faculty_embedding_refresh(app_handle, model)
+    })
+    .await
+    .map_err(|err| format!("Embedding refresh task failed: {err}"))?;
 
     Ok(result?)
 }
 
-fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<String, String> {
+fn perform_faculty_embedding_refresh(
+    app_handle: tauri::AppHandle,
+    model: Option<String>,
+) -> Result<String, String> {
     let started_at = Instant::now();
     emit_faculty_embedding_progress(
         &app_handle,
@@ -2569,8 +2577,19 @@ fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<Str
         },
     );
 
+    let requested_model = model.unwrap_or_default();
+    let effective_model = {
+        let trimmed = requested_model.trim();
+        if trimmed.is_empty() {
+            DEFAULT_EMBEDDING_MODEL.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let target_model = effective_model.clone();
+
     let request_payload = EmbeddingRequestPayload {
-        model: DEFAULT_EMBEDDING_MODEL.to_string(),
+        model: effective_model.clone(),
         texts: contexts
             .iter()
             .map(|context| EmbeddingRequestRow {
@@ -2587,9 +2606,10 @@ fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<Str
         EmbeddingProgressUpdate {
             phase: "embedding".into(),
             message: Some(format!(
-                "Starting embeddings for {total} faculty row{plural}…",
+                "Starting embeddings for {total} faculty row{plural} with {model}…",
                 total = total_contexts,
-                plural = if total_contexts == 1 { "" } else { "s" }
+                plural = if total_contexts == 1 { "" } else { "s" },
+                model = target_model
             )),
             processed_rows: 0,
             total_rows: total_contexts,
@@ -2601,7 +2621,10 @@ fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<Str
     let response = run_embedding_helper(&app_handle, &request_payload)?;
 
     if response.dimension == 0 || response.rows.is_empty() {
-        return Err("The embedding helper returned an empty result. Verify the Python environment can load the PubMedBERT model.".into());
+        return Err(format!(
+            "The embedding helper returned an empty result. Verify the Python environment can load the '{model}' embedding model.",
+            model = target_model
+        ));
     }
 
     let EmbeddingResponsePayload {
@@ -2609,6 +2632,12 @@ fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<Str
         dimension: response_dimension,
         rows: response_rows,
     } = response;
+
+    let response_model = if response_model.trim().is_empty() {
+        target_model.clone()
+    } else {
+        response_model
+    };
 
     let mut embedding_map: HashMap<usize, Vec<f32>> = HashMap::new();
     let helper_row_count = response_rows.len();
@@ -3193,7 +3222,7 @@ def main():
     emit_progress(
         {
             "phase": "loading-model",
-            "message": "Loading PubMedBERT model…",
+            "message": f"Loading {model_name} model…",
             "processedRows": 0,
             "totalRows": total,
         }
@@ -3787,6 +3816,7 @@ fn build_faculty_dataset_status_with_overrides(
         message_variant: None,
         preview: None,
         analysis: None,
+        embedding_model: None,
     };
 
     if !dataset_path.exists() {
@@ -3900,6 +3930,15 @@ fn build_faculty_dataset_status_with_overrides(
                 status.message = Some(err);
                 status.message_variant = Some("error".into());
             }
+        }
+    }
+
+    if let Ok(index) = load_faculty_embedding_index(app_handle) {
+        let model = index.model;
+        if model.trim().is_empty() {
+            status.embedding_model = Some(DEFAULT_EMBEDDING_MODEL.to_string());
+        } else {
+            status.embedding_model = Some(model);
         }
     }
 

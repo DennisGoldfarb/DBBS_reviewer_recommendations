@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -80,6 +80,7 @@ interface FacultyDatasetStatus {
   messageVariant: StatusMessage["variant"] | null;
   preview: SpreadsheetPreview | null;
   analysis: FacultyDatasetAnalysis | null;
+  embeddingModel?: string | null;
 }
 
 interface SubmissionDetails {
@@ -134,6 +135,27 @@ interface EmbeddingProgressPayload {
 }
 
 export const THEME_STORAGE_KEY = "washu-theme";
+
+const DEFAULT_EMBEDDING_MODEL = "NeuML/pubmedbert-base-embeddings";
+
+const EMBEDDING_MODEL_CHOICES: Array<{ value: string; label: string }> = [
+  {
+    value: DEFAULT_EMBEDDING_MODEL,
+    label: "NeuML/pubmedbert-base-embeddings (Default)",
+  },
+  {
+    value: "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
+    label: "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
+  },
+  {
+    value: "sentence-transformers/all-MiniLM-L6-v2",
+    label: "sentence-transformers/all-MiniLM-L6-v2",
+  },
+  {
+    value: "intfloat/e5-large-v2",
+    label: "intfloat/e5-large-v2",
+  },
+];
 
 const getStoredThemePreference = (): ThemePreference => {
   if (typeof window === "undefined") {
@@ -321,8 +343,21 @@ function App() {
   const [datasetConfigurationError, setDatasetConfigurationError] = useState<
     string | null
   >(null);
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] =
+    useState<string>(DEFAULT_EMBEDDING_MODEL);
   const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
   const areControlsDisabled = isSubmitting || isUpdatingEmbeddings;
+  const embeddingModelOptions = useMemo(() => {
+    const baseOptions = [...EMBEDDING_MODEL_CHOICES];
+    const currentModel = datasetStatus?.embeddingModel?.trim();
+    if (
+      currentModel &&
+      !baseOptions.some((option) => option.value === currentModel)
+    ) {
+      baseOptions.push({ value: currentModel, label: currentModel });
+    }
+    return baseOptions;
+  }, [datasetStatus?.embeddingModel]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -362,6 +397,12 @@ function App() {
       fallbackVariant?: StatusMessage["variant"],
     ) => {
       setDatasetStatus(status);
+      const trimmedModel = status.embeddingModel?.trim();
+      if (trimmedModel && trimmedModel.length > 0) {
+        setSelectedEmbeddingModel(trimmedModel);
+      } else {
+        setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
+      }
       if (status.message) {
         const variant = status.messageVariant ?? fallbackVariant;
         if (variant === "success" || variant === "error") {
@@ -471,8 +512,26 @@ function App() {
       setEmbeddingStatus(null);
 
       try {
-        const message = await invoke<string>("update_faculty_embeddings");
+        const model = selectedEmbeddingModel.trim() || DEFAULT_EMBEDDING_MODEL;
+        const message = await invoke<string>("update_faculty_embeddings", {
+          model,
+        });
         setEmbeddingStatus({ variant: "success", message });
+        try {
+          const refreshedStatus = await invoke<FacultyDatasetStatus>(
+            "get_faculty_dataset_status",
+          );
+          applyDatasetStatus(refreshedStatus);
+        } catch (statusError) {
+          const statusMessage =
+            statusError instanceof Error
+              ? statusError.message
+              : String(statusError);
+          setDatasetBanner({
+            variant: "error",
+            message: `Unable to refresh the faculty dataset status: ${statusMessage}`,
+          });
+        }
       } catch (updateError) {
         const message =
           updateError instanceof Error
@@ -484,7 +543,7 @@ function App() {
         setEmbeddingProgress(null);
       }
     },
-    [datasetStatus],
+    [applyDatasetStatus, datasetStatus, selectedEmbeddingModel],
   );
 
   const selectDatasetFile = async () => {
@@ -1913,7 +1972,40 @@ function App() {
                       : "Not configured"}
                 </dd>
               </div>
+              <div>
+                <dt>Embedding model</dt>
+                <dd>
+                  {isDatasetLoading
+                    ? "Loading…"
+                    : datasetStatus?.embeddingModel?.trim()
+                      ? datasetStatus.embeddingModel
+                      : "Not available"}
+                </dd>
+              </div>
             </dl>
+            <div className="embedding-model-selector">
+              <label htmlFor="embedding-model-select">
+                Embedding model for new updates
+              </label>
+              <select
+                id="embedding-model-select"
+                value={selectedEmbeddingModel}
+                onChange={(event) => setSelectedEmbeddingModel(event.target.value)}
+                disabled={
+                  isUpdatingEmbeddings || isDatasetLoading || isDatasetBusy
+                }
+              >
+                {embeddingModelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <p className="small-note">
+                Regenerate faculty embeddings after changing the model to apply
+                your selection.
+              </p>
+            </div>
             {datasetStatus?.message &&
               (datasetStatus.messageVariant ??
                 (datasetStatus.isValid ? "success" : "error")) !==

@@ -575,6 +575,33 @@ button.theme-toggle:focus-visible {
   word-break: break-word;
 }
 
+.embedding-model-selector {
+  margin-top: 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.embedding-model-selector label {
+  font-weight: 600;
+  color: var(--washu-heading);
+}
+
+.embedding-model-selector select {
+  border-radius: 12px;
+  border: 1px solid var(--washu-border);
+  background: var(--washu-surface);
+  color: var(--washu-text);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.95rem;
+}
+
+.embedding-model-selector select:focus {
+  outline: none;
+  border-color: var(--washu-primary);
+  box-shadow: 0 0 0 3px var(--washu-focus-ring);
+}
+
 .dataset-path {
   font-family: "ui-monospace", SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
