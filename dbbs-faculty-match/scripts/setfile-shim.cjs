@@ -110,6 +110,12 @@ const ExitStatus = {
   XATTR_FAILURE: 1,
 };
 
+const ATTRIBUTE_FLAGS = {
+  A: 0x8000, // Alias file
+  B: 0x2000, // Bundle bit (package)
+  C: 0x0400, // Custom icon
+};
+
 function runXattr(args, options = {}) {
   const { context, ...spawnOptions } = options;
   const result = spawnSync('xattr', args, {
@@ -246,12 +252,31 @@ function applyAttributeFlags(targetPath, { set = 0, clear = 0 } = {}) {
   return result;
 }
 
+function setTypeCode(targetPath, typeCode) {
+  const info = readFinderInfo(targetPath);
+  if (info === null) {
+    return null;
+  }
+
+  const buffer = Buffer.isBuffer(info) ? Buffer.from(info) : Buffer.alloc(32);
+  const code = Buffer.from(String(typeCode).padEnd(4, ' ').slice(0, 4), 'ascii');
+  code.copy(buffer, 0);
+
+  const result = writeFinderInfo(targetPath, buffer);
+  if (!result) {
+    return null;
+  }
+
+  return result;
+}
+
 module.exports = {
   ExitStatus,
   runXattr,
   readFinderInfo,
   writeFinderInfo,
   setCreatorCode,
+  setTypeCode,
   applyAttributeFlags,
   logger,
   setLogger,
@@ -261,14 +286,150 @@ module.exports = {
   formatSpawnResultDiagnostic,
 };
 
+function parseAttributeSpec(spec, state) {
+  if (!spec) {
+    throw new Error('Missing attribute specification for -a option.');
+  }
+
+  for (const symbol of spec.split('')) {
+    const upper = symbol.toUpperCase();
+    const flag = ATTRIBUTE_FLAGS[upper];
+
+    if (!flag) {
+      throw new Error(`Unsupported Finder attribute flag: ${symbol}`);
+    }
+
+    if (symbol === upper) {
+      state.set |= flag;
+      state.clear &= ~flag;
+    } else {
+      state.clear |= flag;
+      state.set &= ~flag;
+    }
+  }
+}
+
+function parseCliArguments(argv) {
+  const attributeState = { set: 0, clear: 0 };
+  const options = {
+    attributes: attributeState,
+    creatorCode: null,
+    typeCode: null,
+    targets: [],
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+
+    if (argument === '--') {
+      const remaining = argv.slice(index + 1);
+      if (remaining.length === 0) {
+        throw new Error('Expected at least one target path after --.');
+      }
+      options.targets.push(...remaining);
+      break;
+    }
+
+    if (argument === '-a' || argument.startsWith('-a')) {
+      let spec;
+
+      if (argument.length > 2) {
+        spec = argument.slice(2);
+      } else {
+        index += 1;
+        if (index >= argv.length) {
+          throw new Error('Missing value for -a option.');
+        }
+        spec = argv[index];
+      }
+
+      parseAttributeSpec(spec, attributeState);
+      continue;
+    }
+
+    if (argument === '-c' || argument.startsWith('-c')) {
+      let code;
+
+      if (argument.length > 2) {
+        code = argument.slice(2);
+      } else {
+        index += 1;
+        if (index >= argv.length) {
+          throw new Error('Missing value for -c option.');
+        }
+        code = argv[index];
+      }
+
+      if (!code) {
+        throw new Error('Creator code cannot be empty.');
+      }
+
+      options.creatorCode = code;
+      continue;
+    }
+
+    if (argument === '-t' || argument.startsWith('-t')) {
+      let code;
+
+      if (argument.length > 2) {
+        code = argument.slice(2);
+      } else {
+        index += 1;
+        if (index >= argv.length) {
+          throw new Error('Missing value for -t option.');
+        }
+        code = argv[index];
+      }
+
+      if (!code) {
+        throw new Error('Type code cannot be empty.');
+      }
+
+      options.typeCode = code;
+      continue;
+    }
+
+    if (argument.startsWith('-')) {
+      throw new Error(`Unsupported option: ${argument}`);
+    }
+
+    options.targets.push(argument);
+  }
+
+  if (options.targets.length === 0) {
+    throw new Error('Expected at least one target path.');
+  }
+
+  return options;
+}
+
+function applyOperationsToTarget(targetPath, options) {
+  const { attributes, creatorCode, typeCode } = options;
+
+  if (attributes.set || attributes.clear) {
+    applyAttributeFlags(targetPath, attributes);
+  }
+
+  if (creatorCode) {
+    setCreatorCode(targetPath, creatorCode);
+  }
+
+  if (typeCode) {
+    setTypeCode(targetPath, typeCode);
+  }
+}
+
 if (require.main === module) {
   const [, , ...argv] = process.argv;
   if (argv.length === 0) {
-    process.exit(0);
+    process.exit(ExitStatus.SUCCESS);
   }
 
   try {
-    runXattr(argv);
+    const options = parseCliArguments(argv);
+    for (const target of options.targets) {
+      applyOperationsToTarget(target, options);
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
