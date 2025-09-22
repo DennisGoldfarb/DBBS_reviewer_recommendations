@@ -102,6 +102,7 @@ function pruneBundledRuntime(rootDir) {
   }
 }
 
+const venvMode = 'copies';
 const requirementsHash = hashFile(requirementsPath);
 let reuseExisting = false;
 
@@ -111,7 +112,8 @@ if (fs.existsSync(metadataPath)) {
     if (
       metadata.requirementsHash === requirementsHash &&
       typeof metadata.pythonVersion === 'string' &&
-      metadata.pythonVersion.startsWith('3.11.')
+      metadata.pythonVersion.startsWith('3.11.') &&
+      metadata.mode === venvMode
     ) {
       reuseExisting = true;
       console.log(`\u2705 Bundled Python runtime for ${runtimeDirName} is up to date.`);
@@ -208,7 +210,7 @@ if (!reuseExisting) {
 
   console.log(`\u2139\ufe0f Using ${python.command} to create bundled Python runtime at ${runtimeDir}.`);
 
-  runCommand(python.command, [...python.args, '-m', 'venv', runtimeDir]);
+  runCommand(python.command, [...python.args, '-m', 'venv', `--${venvMode}`, runtimeDir]);
 
   const runtimePython = resolveRuntimePython(runtimeDir);
   if (!runtimePython) {
@@ -235,7 +237,8 @@ if (!reuseExisting) {
     createdAt: new Date().toISOString(),
     platform,
     arch,
-    pythonVersion: versionResult.stdout?.toString().trim()
+    pythonVersion: versionResult.stdout?.toString().trim(),
+    mode: venvMode
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
   console.log(`\u2705 Bundled Python runtime prepared for ${runtimeDirName}.`);
