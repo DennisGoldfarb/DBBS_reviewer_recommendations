@@ -2971,13 +2971,26 @@ struct BundledPythonRuntime {
 }
 
 fn expected_bundled_runtime_root(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
-    app_handle.path().resource_dir().ok().map(|resource_dir| {
-        resource_dir.join("python").join(format!(
-            "{}-{}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ))
-    })
+    let resource_dir = app_handle.path().resource_dir().ok()?;
+
+    let runtime_suffix = PathBuf::from("python").join(format!(
+        "{}-{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+
+    let candidates = vec![
+        resource_dir.join(&runtime_suffix),
+        resource_dir.join("resources").join(&runtime_suffix),
+    ];
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            return Some(candidate.clone());
+        }
+    }
+
+    candidates.into_iter().next()
 }
 
 fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
@@ -3076,15 +3089,27 @@ fn locate_bundled_python_runtime(
         Err(_) => return Ok(None),
     };
 
-    let runtime_root = resource_dir.join("python").join(format!(
+    let runtime_suffix = PathBuf::from("python").join(format!(
         "{}-{}",
         std::env::consts::OS,
         std::env::consts::ARCH
     ));
 
-    if !runtime_root.exists() {
-        return Ok(None);
-    }
+    let candidates = vec![
+        resource_dir.join(&runtime_suffix),
+        resource_dir.join("resources").join(&runtime_suffix),
+    ];
+
+    let runtime_root = match candidates.iter().find_map(|candidate| {
+        if candidate.exists() {
+            Some(candidate.clone())
+        } else {
+            None
+        }
+    }) {
+        Some(path) => path,
+        None => return Ok(None),
+    };
 
     let scripts_dir = if cfg!(target_os = "windows") {
         runtime_root.join("Scripts")
