@@ -1768,7 +1768,6 @@ fn process_prompt_spreadsheet(
         let mut values = student_headers.clone();
         values.push("Total reviewers".into());
         values.push("Total first reviewers".into());
-        values.push("Assigned faculty".into());
         values
     };
     let mut student_summary_sheet = workbook.add_worksheet();
@@ -1807,13 +1806,6 @@ fn process_prompt_spreadsheet(
     } else {
         None
     };
-    let faculty_name_column_index = faculty_headers
-        .iter()
-        .enumerate()
-        .find(|(_, label)| label.to_ascii_lowercase().contains("name"))
-        .map(|(index, _)| index)
-        .unwrap_or(0);
-
     for (row_index, identifiers) in student_summary_rows.iter().enumerate() {
         let row = (row_index + 1) as u32;
         for (col_offset, value) in identifiers.iter().enumerate() {
@@ -1826,8 +1818,6 @@ fn process_prompt_spreadsheet(
 
         let total_col = student_headers.len();
         let first_col = total_col + 1;
-        let assigned_col = total_col + 2;
-
         if match_row_count == 0 {
             student_summary_sheet
                 .write_number(row, total_col as u16, 0.0)
@@ -1838,11 +1828,6 @@ fn process_prompt_spreadsheet(
                 .write_number(row, first_col as u16, 0.0)
                 .map_err(|err| {
                     format!("Unable to write the student first reviewer placeholder: {err}")
-                })?;
-            student_summary_sheet
-                .write_string(row, assigned_col as u16, "")
-                .map_err(|err| {
-                    format!("Unable to write the assigned faculty placeholder: {err}")
                 })?;
             continue;
         }
@@ -1889,48 +1874,6 @@ fn process_prompt_spreadsheet(
         student_summary_sheet
             .write_formula(row, first_col as u16, first_formula.as_str())
             .map_err(|err| format!("Unable to write the student first reviewer formula: {err}"))?;
-
-        if faculty_headers.is_empty() {
-            student_summary_sheet
-                .write_string(row, assigned_col as u16, "")
-                .map_err(|err| {
-                    format!("Unable to write the assigned faculty placeholder: {err}")
-                })?;
-        } else {
-            let faculty_range = excel_range_reference(
-                matches_sheet_name,
-                1,
-                faculty_offset + faculty_name_column_index as u32,
-                match_row_count,
-                faculty_offset + faculty_name_column_index as u32,
-            );
-            let mut conditions = Vec::new();
-            conditions.push(format!(
-                "(( {first}=1)+({reviewer}=1))>0",
-                first = first_reviewer_range.as_ref().unwrap(),
-                reviewer = reviewer_range.as_ref().unwrap()
-            ));
-            for (col_offset, _) in student_headers.iter().enumerate() {
-                let student_range = excel_range_reference(
-                    matches_sheet_name,
-                    1,
-                    student_offset + col_offset as u32,
-                    match_row_count,
-                    student_offset + col_offset as u32,
-                );
-                let summary_cell = excel_cell_reference(row, col_offset as u32, true, false);
-                conditions.push(format!("({student_range}={summary_cell})"));
-            }
-            let include_expr = conditions.join(" * ");
-            let faculty_formula = format!(
-                "=IFERROR(TEXTJOIN(\", \", TRUE, FILTER({faculty_range}, {include_expr})), \"\")",
-                faculty_range = faculty_range,
-                include_expr = include_expr
-            );
-            student_summary_sheet
-                .write_formula(row, assigned_col as u16, faculty_formula.as_str())
-                .map_err(|err| format!("Unable to write the assigned faculty formula: {err}"))?;
-        }
     }
 
     let mut faculty_summary_headers = faculty_headers.clone();
