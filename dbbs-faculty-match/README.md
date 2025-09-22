@@ -48,7 +48,10 @@ to generate embeddings (`torch`, `transformers`, and their dependencies). The
 runtime currently pins `torch==2.2.2` and `transformers==4.56.2`, the newest
 versions that ship wheels for every platform we target with Python 3.11. The
 Tauri bundler copies these resources into the platform-specific installer so
-users do not need a system-wide Python installation.
+users do not need a system-wide Python installation. When bundled, the runtime lives
+under `<install dir>/resources/python/<platform>-<arch>`, allowing the Windows build to
+expose `<install dir>/resources/python/<platform>-<arch>/Scripts/python.exe` for the
+Rust backend.
 
 The form displays a confirmation payload after validation so that you can review
 which settings will be submitted to the backend service. File pickers fall back
