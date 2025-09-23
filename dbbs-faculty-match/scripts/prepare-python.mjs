@@ -102,6 +102,93 @@ function pruneBundledRuntime(rootDir) {
   }
 }
 
+function rewritePyVenvCfg(runtimePath) {
+  const configPath = path.join(runtimePath, 'pyvenv.cfg');
+  if (!fs.existsSync(configPath)) {
+    return;
+  }
+
+  const original = fs.readFileSync(configPath, 'utf8');
+  const newline = original.includes('\r\n') ? '\r\n' : '\n';
+  const lines = original.split(/\r?\n/);
+
+  const isWindows = process.platform === 'win32';
+  const overrides = new Map([
+    ['home', { value: isWindows ? '.' : '.', key: 'home' }],
+    ['include-system-site-packages', { value: 'false', key: 'include-system-site-packages' }],
+    [
+      'executable',
+      {
+        value: isWindows ? 'python.exe' : 'bin/python3',
+        key: 'executable'
+      }
+    ],
+    [
+      'command',
+      {
+        value: `${isWindows ? 'python.exe' : 'python3'} -m venv .`,
+        key: 'command'
+      }
+    ]
+  ]);
+
+  if (!isWindows) {
+    overrides.set('bin', { value: 'bin', key: 'bin' });
+  }
+
+  const seen = new Set();
+  const rewritten = [];
+
+  for (const line of lines) {
+    if (!line.includes('=')) {
+      rewritten.push(line);
+      continue;
+    }
+
+    const [rawKey, ...rest] = line.split('=');
+    const key = rawKey.trim();
+    const value = rest.join('=').trim();
+    const lowerKey = key.toLowerCase();
+    const override = overrides.get(lowerKey);
+
+    if (override) {
+      rewritten.push(`${override.key ?? key} = ${override.value}`);
+      seen.add(lowerKey);
+    } else {
+      rewritten.push(`${key} = ${value}`);
+    }
+  }
+
+  for (const [lowerKey, override] of overrides.entries()) {
+    if (!seen.has(lowerKey)) {
+      rewritten.push(`${override.key} = ${override.value}`);
+    }
+  }
+
+  const sanitized = rewritten.join(newline).replace(/(?:\r?\n)+$/, '');
+  fs.writeFileSync(configPath, `${sanitized}${newline}`);
+}
+
+function ensureWindowsPythonExecutables(runtimePath) {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  const scriptsDir = path.join(runtimePath, 'Scripts');
+  const executables = ['python.exe', 'pythonw.exe'];
+
+  for (const executable of executables) {
+    const source = path.join(scriptsDir, executable);
+    const destination = path.join(runtimePath, executable);
+
+    if (!fs.existsSync(source)) {
+      continue;
+    }
+
+    fs.copyFileSync(source, destination);
+  }
+}
+
 const requirementsHash = hashFile(requirementsPath);
 let reuseExisting = false;
 
@@ -242,6 +329,8 @@ if (!reuseExisting) {
 }
 
 if (fs.existsSync(runtimeDir)) {
+  rewritePyVenvCfg(runtimeDir);
+  ensureWindowsPythonExecutables(runtimeDir);
   console.log('\u2139\ufe0f Removing Python bytecode caches from bundled runtime to avoid long Windows paths.');
   removePythonBytecode(runtimeDir);
   pruneBundledRuntime(runtimeDir);
