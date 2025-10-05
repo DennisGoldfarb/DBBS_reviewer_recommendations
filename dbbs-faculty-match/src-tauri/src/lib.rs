@@ -3086,38 +3086,36 @@ fn locate_bundled_python_runtime(
         return Ok(None);
     }
 
-    let scripts_dir = if cfg!(target_os = "windows") {
-        runtime_root.join("Scripts")
+    let candidate_paths: Vec<PathBuf> = if cfg!(target_os = "windows") {
+        vec![
+            runtime_root.join("python.exe"),
+            runtime_root.join("python"),
+            runtime_root.join("Scripts").join("python.exe"),
+            runtime_root.join("Scripts").join("python"),
+        ]
     } else {
-        runtime_root.join("bin")
+        vec![
+            runtime_root.join("bin").join("python3"),
+            runtime_root.join("bin").join("python"),
+        ]
     };
 
-    if !scripts_dir.exists() {
-        return Err(format!(
-            "The bundled Python runtime is missing the interpreter directory at {}.",
-            scripts_dir.display()
-        ));
+    if let Some(executable) = candidate_paths.iter().find(|candidate| candidate.exists()) {
+        return Ok(Some(BundledPythonRuntime {
+            executable: executable.clone(),
+            root: runtime_root,
+        }));
     }
 
-    let candidate_names: &[&str] = if cfg!(target_os = "windows") {
-        &["python.exe", "python"]
-    } else {
-        &["python3", "python"]
-    };
-
-    for name in candidate_names {
-        let candidate = scripts_dir.join(name);
-        if candidate.exists() {
-            return Ok(Some(BundledPythonRuntime {
-                executable: candidate,
-                root: runtime_root,
-            }));
-        }
-    }
+    let expected_locations = candidate_paths
+        .iter()
+        .map(|candidate| format!("- {}", candidate.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     Err(format!(
-        "The bundled Python runtime at {} does not contain a Python interpreter.",
-        runtime_root.display()
+        "The bundled Python runtime at {} does not contain a Python interpreter. Expected one of:\n{}",
+        runtime_root.display(), expected_locations
     ))
 }
 

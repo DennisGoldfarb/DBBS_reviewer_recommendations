@@ -166,7 +166,12 @@ function findPythonCandidate() {
 
 function resolveRuntimePython(runtimePath) {
   const candidates = process.platform === 'win32'
-    ? [path.join(runtimePath, 'Scripts', 'python.exe'), path.join(runtimePath, 'Scripts', 'python')]
+    ? [
+        path.join(runtimePath, 'python.exe'),
+        path.join(runtimePath, 'python'),
+        path.join(runtimePath, 'Scripts', 'python.exe'),
+        path.join(runtimePath, 'Scripts', 'python')
+      ]
     : [path.join(runtimePath, 'bin', 'python3'), path.join(runtimePath, 'bin', 'python')];
 
   for (const candidate of candidates) {
