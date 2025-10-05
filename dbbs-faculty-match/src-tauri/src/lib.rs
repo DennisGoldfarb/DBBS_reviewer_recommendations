@@ -19,7 +19,7 @@ use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Instant, SystemTime};
-use tauri::{Emitter, Manager};
+use tauri::{path::BaseDirectory, Emitter, Manager};
 
 const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
 const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
@@ -2985,8 +2985,9 @@ fn bundled_runtime_roots(app_handle: &tauri::AppHandle) -> BundledRuntimeRoots {
     ));
 
     let resolver_root = app_handle
-        .path_resolver()
-        .resolve_resource(runtime_relative.clone());
+        .path()
+        .resolve(&runtime_relative, BaseDirectory::Resource)
+        .ok();
 
     let resource_dir_root = if resolver_root.is_none() {
         app_handle
