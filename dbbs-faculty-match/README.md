@@ -34,20 +34,30 @@ referenced files and directories exist before the matching backend is wired in.
    ```
 
 4. (Optional) Prepare the embedded Python runtime that ships with the desktop
-   installers. This step requires Python **3.11** to be installed and available
-   on your `PATH`, runs automatically during `tauri build`, and can be invoked
-   manually to verify dependency installation:
+   installers. The build now vendors the official CPython **3.11** embeddable
+   distribution on Windows and reuses virtual environments on macOS/Linux. The
+   script runs automatically during `tauri build` and can be invoked manually to
+   verify that the dependencies and Python payload are staged correctly:
 
    ```bash
    npm run prepare-python
    ```
 
-The `prepare-python` script creates an isolated virtual environment under
-`src-tauri/resources/python/<platform>-<arch>` and installs the packages needed
-to generate embeddings (`torch`, `transformers`, and their dependencies). The
-runtime currently pins `torch==2.2.2` and `transformers==4.56.2`, the newest
-versions that ship wheels for every platform we target with Python 3.11. The
-Tauri bundler copies these resources into the platform-specific installer so
+On Windows the script:
+
+1. Looks for vendored dependencies under
+   `python/vendor/windows-x86_64/site-packages` (populate this directory from a
+   Windows virtual environment that matches Python 3.11 x86_64).
+2. Downloads (or reuses) the official `python-3.11.9-embed-amd64.zip` archive
+   and extracts it into `src-tauri/resources/python/`.
+3. Enables `site-packages` via `python311._pth` and copies the contents of
+   `python/app` next to the interpreter as your application payload.
+
+macOS and Linux builds continue to create an isolated virtual environment under
+`src-tauri/resources/python/<platform>-<arch>` using the Python 3.11 interpreter
+available on your machine. In all cases the packaged runtime is self-contained,
+bundles the dependencies required for embedding generation (currently
+`torch==2.2.2` and `transformers==4.56.2`), and ships with the installer so end
 users do not need a system-wide Python installation.
 
 The form displays a confirmation payload after validation so that you can review
