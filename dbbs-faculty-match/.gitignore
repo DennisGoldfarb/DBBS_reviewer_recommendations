@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Generated sidecar artifacts
+python/.sidecar-build
+src-tauri/binaries
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
