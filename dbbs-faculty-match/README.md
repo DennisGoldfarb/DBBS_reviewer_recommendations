@@ -42,13 +42,16 @@ referenced files and directories exist before the matching backend is wired in.
    npm run prepare-python
    ```
 
-The `prepare-python` script creates an isolated virtual environment under
-`src-tauri/resources/python/<platform>-<arch>` and installs the packages needed
-to generate embeddings (`torch`, `transformers`, and their dependencies). The
-runtime currently pins `torch==2.2.2` and `transformers==4.56.2`, the newest
-versions that ship wheels for every platform we target with Python 3.11. The
-Tauri bundler copies these resources into the platform-specific installer so
-users do not need a system-wide Python installation.
+The `prepare-python` script now vendors the official CPython **3.11.9**
+embeddable distribution for Windows inside
+`src-tauri/resources/python/windows-<arch>` and installs the packages listed in
+`python/requirements.txt` directly into the bundled `site-packages` directory.
+Any Python sources placed in `python/app/` are copied into the embedded
+runtime's `app/` folder so they can be launched with
+`resources/python/python.exe -I -s -E app/<entrypoint>.py`. On macOS and Linux we
+continue to build a virtual environment for parity with the development tools.
+The Tauri bundler copies everything under `src-tauri/resources/python/` so that
+users never need to supply their own Python installation.
 
 The form displays a confirmation payload after validation so that you can review
 which settings will be submitted to the backend service. File pickers fall back
