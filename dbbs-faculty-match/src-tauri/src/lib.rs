@@ -2970,14 +2970,39 @@ struct BundledPythonRuntime {
     root: PathBuf,
 }
 
-fn expected_bundled_runtime_root(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
-    app_handle.path().resource_dir().ok().map(|resource_dir| {
-        resource_dir.join("python").join(format!(
-            "{}-{}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ))
-    })
+#[derive(Debug, Clone)]
+struct BundledRuntimeRoots {
+    relative: PathBuf,
+    resolver_root: Option<PathBuf>,
+    resource_dir_root: Option<PathBuf>,
+}
+
+fn bundled_runtime_roots(app_handle: &tauri::AppHandle) -> BundledRuntimeRoots {
+    let runtime_relative = PathBuf::from("python").join(format!(
+        "{}-{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+
+    let resolver_root = app_handle
+        .path_resolver()
+        .resolve_resource(runtime_relative.clone());
+
+    let resource_dir_root = if resolver_root.is_none() {
+        app_handle
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|resource_dir| resource_dir.join(&runtime_relative))
+    } else {
+        None
+    };
+
+    BundledRuntimeRoots {
+        relative: runtime_relative,
+        resolver_root,
+        resource_dir_root,
+    }
 }
 
 fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
@@ -3008,15 +3033,31 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
                 ));
             }
         }
-    } else if let Some(expected_root) = expected_bundled_runtime_root(app_handle) {
-        attempt_messages.push(format!(
-            "Bundled runtime not found at {}.",
-            expected_root.display()
-        ));
     } else {
-        attempt_messages.push(
-            "Bundled runtime path could not be determined from the application resources directory.".to_string(),
-        );
+        let roots = bundled_runtime_roots(app_handle);
+
+        if let Some(resolver_root) = &roots.resolver_root {
+            attempt_messages.push(format!(
+                "Bundled runtime not found at {}.",
+                resolver_root.display()
+            ));
+        } else {
+            attempt_messages.push(format!(
+                "Bundled runtime resource '{}' could not be resolved via the application path resolver.",
+                roots.relative.display()
+            ));
+        }
+
+        if let Some(resource_dir_root) = &roots.resource_dir_root {
+            attempt_messages.push(format!(
+                "Bundled runtime not found at {}.",
+                resource_dir_root.display()
+            ));
+        } else if roots.resolver_root.is_none() {
+            attempt_messages.push(
+                "Bundled runtime path could not be determined from the application resources directory.".to_string(),
+            );
+        }
     }
 
     let candidates = ["python3", "python"];
@@ -3071,17 +3112,22 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
 fn locate_bundled_python_runtime(
     app_handle: &tauri::AppHandle,
 ) -> Result<Option<BundledPythonRuntime>, String> {
-    let resource_dir = match app_handle.path().resource_dir() {
-        Ok(path) => path,
-        Err(_) => return Ok(None),
-    };
+    let roots = bundled_runtime_roots(app_handle);
 
-    let runtime_root = resource_dir.join("python").join(format!(
-        "{}-{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    ));
+    if let Some(runtime_root) = roots.resolver_root.clone() {
+        return inspect_bundled_python_runtime(runtime_root);
+    }
 
+    if let Some(runtime_root) = roots.resource_dir_root.clone() {
+        return inspect_bundled_python_runtime(runtime_root);
+    }
+
+    Ok(None)
+}
+
+fn inspect_bundled_python_runtime(
+    runtime_root: PathBuf,
+) -> Result<Option<BundledPythonRuntime>, String> {
     if !runtime_root.exists() {
         return Ok(None);
     }
@@ -3110,7 +3156,7 @@ fn locate_bundled_python_runtime(
         if candidate.exists() {
             return Ok(Some(BundledPythonRuntime {
                 executable: candidate,
-                root: runtime_root,
+                root: runtime_root.clone(),
             }));
         }
     }
