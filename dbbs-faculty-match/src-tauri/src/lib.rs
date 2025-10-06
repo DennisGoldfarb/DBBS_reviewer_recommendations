@@ -3217,16 +3217,27 @@ fn warm_up_embedding_helper(app_handle: &tauri::AppHandle) -> Result<(), String>
 struct BundledPythonRuntime {
     executable: PathBuf,
     root: PathBuf,
+    scripts_dir: PathBuf,
+}
+
+fn python_runtime_dir_name() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn path_list_separator() -> &'static str {
+    if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    }
 }
 
 fn expected_bundled_runtime_root(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
-    app_handle.path().resource_dir().ok().map(|resource_dir| {
-        resource_dir.join("python").join(format!(
-            "{}-{}",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ))
-    })
+    app_handle
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|resource_dir| resource_dir.join("python").join(python_runtime_dir_name()))
 }
 
 fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
@@ -3242,11 +3253,24 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .current_dir(&runtime.root)
             .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
             .env("TOKENIZERS_PARALLELISM", "false")
             .env("PYTHONUTF8", "1")
             .env("PYTHONUNBUFFERED", "1")
             .env("VIRTUAL_ENV", runtime.root.as_os_str())
+            .env(
+                "PATH",
+                match std::env::var_os("PATH") {
+                    Some(existing) => {
+                        let mut joined = runtime.scripts_dir.clone().into_os_string();
+                        joined.push(path_list_separator());
+                        joined.push(existing);
+                        joined
+                    }
+                    None => runtime.scripts_dir.clone().into_os_string(),
+                },
+            )
             .spawn()
         {
             Ok(child) => return Ok(child),
@@ -3320,54 +3344,110 @@ fn spawn_python_helper(app_handle: &tauri::AppHandle) -> Result<Child, String> {
 fn locate_bundled_python_runtime(
     app_handle: &tauri::AppHandle,
 ) -> Result<Option<BundledPythonRuntime>, String> {
-    let resource_dir = match app_handle.path().resource_dir() {
-        Ok(path) => path,
-        Err(_) => return Ok(None),
-    };
+    let runtime_dir_name = python_runtime_dir_name();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
 
-    let runtime_root = resource_dir.join("python").join(format!(
-        "{}-{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    ));
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        let direct = resource_dir.join("python").join(&runtime_dir_name);
+        if seen.insert(direct.clone()) {
+            candidates.push(direct);
+        }
 
-    if !runtime_root.exists() {
-        return Ok(None);
-    }
-
-    let scripts_dir = if cfg!(target_os = "windows") {
-        runtime_root.join("Scripts")
-    } else {
-        runtime_root.join("bin")
-    };
-
-    if !scripts_dir.exists() {
-        return Err(format!(
-            "The bundled Python runtime is missing the interpreter directory at {}.",
-            scripts_dir.display()
-        ));
-    }
-
-    let candidate_names: &[&str] = if cfg!(target_os = "windows") {
-        &["python.exe", "python"]
-    } else {
-        &["python3", "python"]
-    };
-
-    for name in candidate_names {
-        let candidate = scripts_dir.join(name);
-        if candidate.exists() {
-            return Ok(Some(BundledPythonRuntime {
-                executable: candidate,
-                root: runtime_root,
-            }));
+        let flattened = resource_dir.join(&runtime_dir_name);
+        if seen.insert(flattened.clone()) {
+            candidates.push(flattened);
         }
     }
 
-    Err(format!(
-        "The bundled Python runtime at {} does not contain a Python interpreter.",
-        runtime_root.display()
-    ))
+    if let Ok(resolved) = app_handle
+        .path()
+        .resolve_resource(format!("python/{runtime_dir_name}"))
+    {
+        if seen.insert(resolved.clone()) {
+            candidates.push(resolved);
+        }
+    }
+
+    if let Ok(resolved_python) = app_handle.path().resolve_resource("python") {
+        let combined = resolved_python.join(&runtime_dir_name);
+        if seen.insert(combined.clone()) {
+            candidates.push(combined);
+        }
+    }
+
+    if let Ok(exe_dir) = app_handle.path().executable_dir() {
+        let nested = exe_dir
+            .join("resources")
+            .join("python")
+            .join(&runtime_dir_name);
+        if seen.insert(nested.clone()) {
+            candidates.push(nested);
+        }
+
+        let sibling = exe_dir.join("python").join(&runtime_dir_name);
+        if seen.insert(sibling.clone()) {
+            candidates.push(sibling);
+        }
+    }
+
+    if let Ok(app_dir) = app_handle.path().app_dir() {
+        let nested = app_dir.join("python").join(&runtime_dir_name);
+        if seen.insert(nested.clone()) {
+            candidates.push(nested);
+        }
+    }
+
+    if let Ok(data_dir) = app_handle.path().app_local_data_dir() {
+        let nested = data_dir.join("python").join(&runtime_dir_name);
+        if seen.insert(nested.clone()) {
+            candidates.push(nested);
+        }
+    }
+
+    for runtime_root in candidates {
+        if !runtime_root.exists() {
+            continue;
+        }
+
+        let scripts_dir = if cfg!(target_os = "windows") {
+            runtime_root.join("Scripts")
+        } else {
+            runtime_root.join("bin")
+        };
+
+        if !scripts_dir.exists() {
+            continue;
+        }
+
+        let candidate_names: &[&str] = if cfg!(target_os = "windows") {
+            &["python.exe", "python"]
+        } else {
+            &["python3", "python"]
+        };
+
+        for name in candidate_names {
+            let candidate = scripts_dir.join(name);
+            if candidate.exists() {
+                return Ok(Some(BundledPythonRuntime {
+                    executable: candidate,
+                    root: runtime_root,
+                    scripts_dir,
+                }));
+            }
+        }
+    }
+
+    if let Some(expected_root) = expected_bundled_runtime_root(app_handle) {
+        if expected_root.exists() {
+            return Err(format!(
+                "The bundled Python runtime at {} does not contain a Python interpreter.",
+                expected_root.display()
+            ));
+        }
+    }
+
+    Ok(None)
 }
 
 const PYTHON_EMBEDDING_HELPER: &str = include_str!("../../python/embedding_helper.py");
