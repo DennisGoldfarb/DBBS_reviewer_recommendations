@@ -15,10 +15,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
@@ -1756,7 +1756,7 @@ fn build_matches_workbook(
 ) -> Result<Vec<u8>, String> {
     let mut workbook = Workbook::new();
     let matches_sheet_name = "Matches";
-    let mut matches_sheet = workbook.add_worksheet();
+    let matches_sheet = workbook.add_worksheet();
     matches_sheet
         .set_name(matches_sheet_name)
         .map_err(|err| format!("Unable to configure the matches worksheet: {err}"))?;
@@ -1843,7 +1843,7 @@ fn build_matches_workbook(
     student_summary_headers.push("Total first reviewers".into());
     student_summary_headers.push("Total reviewers".into());
 
-    let mut student_summary_sheet = workbook.add_worksheet();
+    let student_summary_sheet = workbook.add_worksheet();
     student_summary_sheet
         .set_name("Student Summary")
         .map_err(|err| format!("Unable to configure the student summary worksheet: {err}"))?;
@@ -1951,7 +1951,7 @@ fn build_matches_workbook(
     faculty_summary_headers.push("First reviewer count".into());
     faculty_summary_headers.push("Total reviewer count".into());
 
-    let mut faculty_summary_sheet = workbook.add_worksheet();
+    let faculty_summary_sheet = workbook.add_worksheet();
     faculty_summary_sheet
         .set_name("Faculty Summary")
         .map_err(|err| format!("Unable to configure the faculty summary worksheet: {err}"))?;
@@ -4824,7 +4824,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(EmbeddingHelperHandle::default())
         .setup(|app| {
-            let app_handle = app.handle();
+            let app_handle = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 if let Err(err) = warm_up_embedding_helper(&app_handle) {
                     eprintln!("⚠️ Unable to warm up the embedding helper: {err}");
