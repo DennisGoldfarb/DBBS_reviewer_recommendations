@@ -3360,22 +3360,6 @@ fn locate_bundled_python_runtime(
         }
     }
 
-    if let Ok(resolved) = app_handle
-        .path()
-        .resolve_resource(format!("python/{runtime_dir_name}"))
-    {
-        if seen.insert(resolved.clone()) {
-            candidates.push(resolved);
-        }
-    }
-
-    if let Ok(resolved_python) = app_handle.path().resolve_resource("python") {
-        let combined = resolved_python.join(&runtime_dir_name);
-        if seen.insert(combined.clone()) {
-            candidates.push(combined);
-        }
-    }
-
     if let Ok(exe_dir) = app_handle.path().executable_dir() {
         let nested = exe_dir
             .join("resources")
@@ -3388,13 +3372,6 @@ fn locate_bundled_python_runtime(
         let sibling = exe_dir.join("python").join(&runtime_dir_name);
         if seen.insert(sibling.clone()) {
             candidates.push(sibling);
-        }
-    }
-
-    if let Ok(app_dir) = app_handle.path().app_dir() {
-        let nested = app_dir.join("python").join(&runtime_dir_name);
-        if seen.insert(nested.clone()) {
-            candidates.push(nested);
         }
     }
 
