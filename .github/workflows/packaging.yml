@@ -23,7 +23,9 @@ jobs:
           - os: windows-latest
             artifact-suffix: windows_x64
           - os: macos-latest
-            artifact-suffix: macos
+            artifact-suffix: macos_arm64
+          - os: macos-13
+            artifact-suffix: macos_x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -204,7 +206,9 @@ jobs:
           - os: windows-latest
             artifact-suffix: windows_x64
           - os: macos-latest
-            artifact-suffix: macos
+            artifact-suffix: macos_arm64
+          - os: macos-13
+            artifact-suffix: macos_x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
