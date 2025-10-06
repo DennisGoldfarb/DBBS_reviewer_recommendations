@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Mapping, Sequence
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
@@ -21,6 +22,46 @@ except ImportError as exc:
     sys.exit(1)
 
 hf_logging.set_verbosity_error()
+
+
+def normalize_text_value(value) -> str:
+    """Coerce arbitrary JSON payload values into a clean text string."""
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8").strip()
+        except Exception:  # noqa: BLE001
+            return value.decode("utf-8", "replace").strip()
+
+    if isinstance(value, Mapping):
+        parts = []
+        for key in ("text", "value", "content"):
+            if key in value:
+                part = normalize_text_value(value[key])
+                if part:
+                    parts.append(part)
+        if not parts:
+            for item in value.values():
+                part = normalize_text_value(item)
+                if part:
+                    parts.append(part)
+        return "\n\n".join(parts)
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        parts = []
+        for item in value:
+            part = normalize_text_value(item)
+            if part:
+                parts.append(part)
+        return "\n\n".join(parts)
+
+    return str(value).strip()
 
 
 def emit_progress(payload: dict) -> None:
@@ -92,8 +133,15 @@ def main() -> None:
     start_time = time.time()
 
     rows = []
-    for item in texts:
-        text = (item.get("text") or "").strip()
+    for index, item in enumerate(texts):
+        if isinstance(item, Mapping):
+            row_id = item.get("id")
+            raw_text = item.get("text")
+        else:
+            row_id = None
+            raw_text = item
+
+        text = normalize_text_value(raw_text)
         if not text:
             continue
 
@@ -116,7 +164,15 @@ def main() -> None:
         counts = mask.sum(dim=1).clamp(min=1e-9)
         embedding = (summed / counts).squeeze(0)
 
-        rows.append({"id": item.get("id"), "embedding": embedding.tolist()})
+        if isinstance(row_id, int):
+            identifier = row_id
+        else:
+            try:
+                identifier = int(str(row_id))
+            except (TypeError, ValueError):
+                identifier = index
+
+        rows.append({"id": identifier, "embedding": embedding.tolist()})
 
         processed = len(rows)
         elapsed = time.time() - start_time
