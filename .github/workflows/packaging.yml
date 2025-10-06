@@ -324,6 +324,7 @@ jobs:
           TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
 
       - name: Import Apple codesigning certificates
+        id: import-certs
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
         uses: apple-actions/import-codesign-certs@v5
         with:
@@ -331,6 +332,20 @@ jobs:
           p12-password:      ${{ secrets.MACOS_CERT_PASSWORD }}
           keychain-password: ${{ secrets.MACOS_CERT_PASSWORD }}
           keychain:          signing_temp
+
+      - name: Show imported signing identities
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        env:
+          KEYCHAIN_PATH: ${{ steps.import-certs.outputs.keychain-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYCHAIN_PATH:-}" ]]; then
+            echo "Keychain path from import step not available" >&2
+            exit 1
+          fi
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
 
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
@@ -386,6 +401,7 @@ jobs:
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          KEYCHAIN_PATH: ${{ steps.import-certs.outputs.keychain-path }}
         shell: bash
         run: |
           set -euo pipefail
@@ -394,7 +410,11 @@ jobs:
             echo "DMG_PATH environment variable is not set" >&2
             exit 1
           fi
-          codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$dmg_path"
+          if [[ -z "${KEYCHAIN_PATH:-}" ]]; then
+            echo "KEYCHAIN_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          codesign --force --timestamp --sign "$CODESIGN_IDENTITY" --keychain "$KEYCHAIN_PATH" "$dmg_path"
           codesign --verify --verbose "$dmg_path"
 
       - name: Notarize macOS disk image
