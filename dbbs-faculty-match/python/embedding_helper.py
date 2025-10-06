@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Mapping, Sequence
@@ -24,6 +25,44 @@ except ImportError as exc:
 hf_logging.set_verbosity_error()
 
 
+def sanitize_utf8_text(text: str) -> str:
+    """Ensure a text string can be encoded as UTF-8, dropping bad words."""
+
+    if not text:
+        return ""
+
+    cleaned_parts = []
+    last_index = 0
+
+    for match in re.finditer(r"\S+", text):
+        prefix = text[last_index : match.start()]
+        if prefix:
+            cleaned_parts.append(prefix)
+
+        word = match.group(0)
+        try:
+            word.encode("utf-8")
+        except UnicodeEncodeError:
+            pass
+        else:
+            cleaned_parts.append(word)
+
+        last_index = match.end()
+
+    suffix = text[last_index:]
+    if suffix:
+        cleaned_parts.append(suffix)
+
+    cleaned = "".join(cleaned_parts)
+
+    try:
+        cleaned.encode("utf-8")
+    except UnicodeEncodeError:
+        cleaned = cleaned.encode("utf-8", "ignore").decode("utf-8", "ignore")
+
+    return cleaned.strip()
+
+
 def normalize_text_value(value) -> str:
     """Coerce arbitrary JSON payload values into a clean text string."""
 
@@ -31,13 +70,14 @@ def normalize_text_value(value) -> str:
         return ""
 
     if isinstance(value, str):
-        return value.strip()
+        return sanitize_utf8_text(value.strip())
 
     if isinstance(value, (bytes, bytearray)):
         try:
-            return value.decode("utf-8").strip()
+            text = value.decode("utf-8", errors="surrogateescape")
         except Exception:  # noqa: BLE001
-            return value.decode("utf-8", "replace").strip()
+            text = value.decode("utf-8", "ignore")
+        return sanitize_utf8_text(text.strip())
 
     if isinstance(value, Mapping):
         parts = []
@@ -51,7 +91,7 @@ def normalize_text_value(value) -> str:
                 part = normalize_text_value(item)
                 if part:
                     parts.append(part)
-        return "\n\n".join(parts)
+        return sanitize_utf8_text("\n\n".join(parts))
 
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         parts = []
@@ -59,9 +99,9 @@ def normalize_text_value(value) -> str:
             part = normalize_text_value(item)
             if part:
                 parts.append(part)
-        return "\n\n".join(parts)
+        return sanitize_utf8_text("\n\n".join(parts))
 
-    return str(value).strip()
+    return sanitize_utf8_text(str(value).strip())
 
 
 def emit_progress(payload: dict) -> None:
