@@ -210,6 +210,8 @@ jobs:
           - os: macos-13
             artifact-suffix: macos_x64
     runs-on: ${{ matrix.os }}
+    env:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -321,6 +323,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
 
+      - name: Import Apple codesigning certificates
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        uses: apple-actions/import-codesign-certs@v5
+        with:
+          p12-file-base64:   ${{ secrets.MACOS_CERT_P12 }}
+          p12-password:      ${{ secrets.MACOS_CERT_PASSWORD }}
+          keychain-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+          keychain:          signing_temp
+
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -367,7 +378,68 @@ jobs:
             exit 1
           fi
           new_name="${{ steps.metadata.outputs.slug }}_${{ steps.metadata.outputs.version }}_${{ matrix.artifact-suffix }}.dmg"
-          mv "$dmg" "$(dirname "$dmg")/$new_name"
+          final_path="$(dirname "$dmg")/$new_name"
+          mv "$dmg" "$final_path"
+          echo "DMG_PATH=$final_path" >>"$GITHUB_ENV"
+
+      - name: Codesign macOS disk image
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="${DMG_PATH:-}"
+          if [[ -z "$dmg_path" ]]; then
+            echo "DMG_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$dmg_path"
+          codesign --verify --verbose "$dmg_path"
+
+      - name: Notarize macOS disk image
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        timeout-minutes: 120
+        env:
+          NOTARIZE_APPLE_ID:  ${{ secrets.NOTARIZE_APPLE_ID }}
+          NOTARIZE_PASSWORD:  ${{ secrets.NOTARIZE_PASSWORD }}
+          NOTARIZE_TEAM_ID:   ${{ secrets.NOTARIZE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="${DMG_PATH:-}"
+          if [[ -z "$dmg_path" ]]; then
+            echo "DMG_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          xcrun notarytool store-credentials notary-profile \
+            --apple-id "$NOTARIZE_APPLE_ID" \
+            --team-id "$NOTARIZE_TEAM_ID" \
+            --password "$NOTARIZE_PASSWORD"
+          result=$(xcrun notarytool submit "$dmg_path" \
+            --keychain-profile notary-profile \
+            --wait --output-format json)
+          status=$(echo "$result" | jq -r '.status')
+          submission_id=$(echo "$result" | jq -r '.id')
+          if [[ "$status" != "Accepted" ]]; then
+            echo "Notarization failed: $status" >&2
+            if [[ -n "$submission_id" && "$submission_id" != "null" ]]; then
+              xcrun notarytool log "$submission_id" --keychain-profile notary-profile || true
+            fi
+            exit 1
+          fi
+
+      - name: Staple notarization ticket to DMG
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="${DMG_PATH:-}"
+          if [[ -z "$dmg_path" ]]; then
+            echo "DMG_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          xcrun stapler staple "$dmg_path"
 
       - name: Upload release artifacts
         shell: bash
