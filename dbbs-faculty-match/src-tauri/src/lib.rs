@@ -15,9 +15,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
 
@@ -709,6 +711,45 @@ struct EmbeddingResponsePayload {
 struct EmbeddingResponseRow {
     id: usize,
     embedding: Vec<f32>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum EmbeddingHelperEnvelope {
+    #[serde(rename_all = "camelCase")]
+    Result { payload: EmbeddingResponsePayload },
+    #[serde(rename_all = "camelCase")]
+    Error { message: String },
+}
+
+enum EmbeddingHelperMessage {
+    Response(EmbeddingResponsePayload),
+    Error(String),
+    Terminated(Option<String>),
+}
+
+struct EmbeddingHelperProcess {
+    child: Child,
+    stdin: BufWriter<std::process::ChildStdin>,
+    receiver: Receiver<EmbeddingHelperMessage>,
+    progress_total: Arc<Mutex<Option<usize>>>,
+    stderr_buffer: Arc<Mutex<Vec<u8>>>,
+    stdout_handle: Option<std::thread::JoinHandle<()>>,
+    stderr_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct EmbeddingHelperHandle {
+    process: Mutex<Option<EmbeddingHelperProcess>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingHelperCommand<'a> {
+    #[serde(rename = "type")]
+    command_type: &'static str,
+    #[serde(flatten)]
+    payload: &'a EmbeddingRequestPayload,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2785,184 +2826,392 @@ fn indexes_from_spreadsheet_labels(
     Ok(indexes)
 }
 
+impl EmbeddingHelperProcess {
+    fn spawn(app_handle: &tauri::AppHandle) -> Result<Self, String> {
+        let mut child = spawn_python_helper(app_handle)?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Unable to access the embedding helper stdin.".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Unable to access the embedding helper stdout.".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "Unable to access the embedding helper stderr.".to_string())?;
+
+        let progress_total = Arc::new(Mutex::new(None));
+        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+
+        let (sender, receiver) = mpsc::channel();
+
+        let stdout_sender = sender.clone();
+        let stdout_handle = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = stdout_sender.send(EmbeddingHelperMessage::Terminated(None));
+                        break;
+                    }
+                    Ok(_) => {
+                        let trimmed = line.trim_end();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        if let Ok(response) =
+                            serde_json::from_str::<EmbeddingResponsePayload>(trimmed)
+                        {
+                            if stdout_sender
+                                .send(EmbeddingHelperMessage::Response(response))
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        match serde_json::from_str::<EmbeddingHelperEnvelope>(trimmed) {
+                            Ok(EmbeddingHelperEnvelope::Result { payload }) => {
+                                if stdout_sender
+                                    .send(EmbeddingHelperMessage::Response(payload))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Ok(EmbeddingHelperEnvelope::Error { message }) => {
+                                let _ = stdout_sender.send(EmbeddingHelperMessage::Error(message));
+                            }
+                            Err(err) => {
+                                let message = format!(
+                                    "Unable to parse embedding helper output: {err}. Raw: {trimmed}"
+                                );
+                                let _ = stdout_sender.send(EmbeddingHelperMessage::Error(message));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let _ = stdout_sender.send(EmbeddingHelperMessage::Error(format!(
+                            "Unable to read embedding helper stdout: {err}"
+                        )));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let progress_total_for_thread = Arc::clone(&progress_total);
+        let stderr_buffer_for_thread = Arc::clone(&stderr_buffer);
+        let app_handle_for_progress = app_handle.clone();
+        let stderr_sender = sender.clone();
+        let stderr_handle = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if let Some(json_str) = line.strip_prefix("PROGRESS ") {
+                            match serde_json::from_str::<EmbeddingProgressUpdate>(json_str.trim()) {
+                                Ok(mut update) => {
+                                    if update.total_rows == 0 {
+                                        if let Ok(total) = progress_total_for_thread.lock() {
+                                            if let Some(rows) = *total {
+                                                update.total_rows = rows;
+                                            }
+                                        }
+                                    }
+                                    emit_faculty_embedding_progress(
+                                        &app_handle_for_progress,
+                                        update,
+                                    );
+                                }
+                                Err(_) => {
+                                    if let Ok(mut buffer) = stderr_buffer_for_thread.lock() {
+                                        buffer.extend_from_slice(line.as_bytes());
+                                    }
+                                }
+                            }
+                        } else if let Ok(mut buffer) = stderr_buffer_for_thread.lock() {
+                            buffer.extend_from_slice(line.as_bytes());
+                        }
+                    }
+                    Err(err) => {
+                        let _ = stderr_sender.send(EmbeddingHelperMessage::Error(format!(
+                            "Unable to read embedding helper stderr: {err}"
+                        )));
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            child,
+            stdin: BufWriter::new(stdin),
+            receiver,
+            progress_total,
+            stderr_buffer,
+            stdout_handle: Some(stdout_handle),
+            stderr_handle: Some(stderr_handle),
+        })
+    }
+
+    fn is_running(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(_) => false,
+        }
+    }
+
+    fn send_embedding_request(
+        &mut self,
+        payload: &EmbeddingRequestPayload,
+    ) -> Result<EmbeddingResponsePayload, String> {
+        if let Ok(mut total) = self.progress_total.lock() {
+            *total = Some(payload.texts.len());
+        }
+        if let Ok(mut buffer) = self.stderr_buffer.lock() {
+            buffer.clear();
+        }
+
+        let command = EmbeddingHelperCommand {
+            command_type: "embed",
+            payload,
+        };
+
+        let mut data = serde_json::to_vec(&command)
+            .map_err(|err| format!("Unable to serialize the embedding request: {err}"))?;
+        data.push(b'\n');
+
+        if let Err(err) = self.stdin.write_all(&data) {
+            return Err(self.augment_error(format!(
+                "Unable to send data to the embedding helper: {err}"
+            )));
+        }
+        if let Err(err) = self.stdin.flush() {
+            return Err(
+                self.augment_error(format!("Unable to flush embedding helper input: {err}"))
+            );
+        }
+
+        match self.receiver.recv() {
+            Ok(EmbeddingHelperMessage::Response(response)) => {
+                if let Ok(mut total) = self.progress_total.lock() {
+                    *total = None;
+                }
+                Ok(response)
+            }
+            Ok(EmbeddingHelperMessage::Error(message)) => {
+                if let Ok(mut total) = self.progress_total.lock() {
+                    *total = None;
+                }
+                Err(self.augment_error(message))
+            }
+            Ok(EmbeddingHelperMessage::Terminated(message)) => {
+                if let Ok(mut total) = self.progress_total.lock() {
+                    *total = None;
+                }
+                Err(self.describe_termination(message))
+            }
+            Err(_) => {
+                if let Ok(mut total) = self.progress_total.lock() {
+                    *total = None;
+                }
+                Err(self.augment_error("Lost communication with the embedding helper.".into()))
+            }
+        }
+    }
+
+    fn send_preload_request(&mut self, model: &str) -> Result<(), String> {
+        if let Ok(mut total) = self.progress_total.lock() {
+            *total = Some(0);
+        }
+        if let Ok(mut buffer) = self.stderr_buffer.lock() {
+            buffer.clear();
+        }
+
+        let mut data = serde_json::to_vec(&serde_json::json!({
+            "type": "preload",
+            "model": model,
+        }))
+        .map_err(|err| format!("Unable to serialize the preload request: {err}"))?;
+        data.push(b'\n');
+
+        if let Err(err) = self.stdin.write_all(&data) {
+            return Err(self.augment_error(format!(
+                "Unable to send data to the embedding helper: {err}"
+            )));
+        }
+        if let Err(err) = self.stdin.flush() {
+            return Err(
+                self.augment_error(format!("Unable to flush embedding helper input: {err}"))
+            );
+        }
+
+        let result = match self.receiver.recv() {
+            Ok(EmbeddingHelperMessage::Response(_)) => Ok(()),
+            Ok(EmbeddingHelperMessage::Error(message)) => Err(self.augment_error(message)),
+            Ok(EmbeddingHelperMessage::Terminated(message)) => {
+                Err(self.describe_termination(message))
+            }
+            Err(_) => {
+                Err(self.augment_error("Lost communication with the embedding helper.".into()))
+            }
+        };
+
+        if let Ok(mut total) = self.progress_total.lock() {
+            *total = None;
+        }
+
+        result
+    }
+
+    fn augment_error(&mut self, base: String) -> String {
+        let mut message = base;
+
+        if let Ok(buffer) = self.stderr_buffer.lock() {
+            if !buffer.is_empty() {
+                let stderr_text = String::from_utf8_lossy(&buffer);
+                let trimmed = stderr_text.trim();
+                if !trimmed.is_empty() {
+                    message = format!("{message}\n\nEmbedding helper stderr:\n{trimmed}");
+                }
+            }
+        }
+
+        if let Ok(Some(status)) = self.child.try_wait() {
+            message = format!(
+                "{message}\n\nEmbedding helper exit status: {status}",
+                status = status
+            );
+        }
+
+        message
+    }
+
+    fn describe_termination(&mut self, reason: Option<String>) -> String {
+        let base = reason.unwrap_or_else(|| "The embedding helper exited unexpectedly.".into());
+        self.augment_error(base)
+    }
+
+    fn send_shutdown_message(&mut self) {
+        if !self.is_running() {
+            return;
+        }
+
+        let shutdown_command = serde_json::json!({ "type": "shutdown" });
+        let mut data = match serde_json::to_vec(&shutdown_command) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        data.push(b'\n');
+
+        let _ = self.stdin.write_all(&data);
+        let _ = self.stdin.flush();
+    }
+
+    fn shutdown(&mut self) {
+        self.send_shutdown_message();
+        let _ = self.child.wait();
+
+        if let Some(handle) = self.stdout_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.stderr_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for EmbeddingHelperProcess {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 fn run_embedding_helper(
     app_handle: &tauri::AppHandle,
     payload: &EmbeddingRequestPayload,
 ) -> Result<EmbeddingResponsePayload, String> {
     let total_rows = payload.texts.len();
-    let mut child = spawn_python_helper(app_handle)?;
-    let input = serde_json::to_vec(payload)
-        .map_err(|err| format!("Unable to serialize the embedding request: {err}"))?;
+    let helper_state: tauri::State<EmbeddingHelperHandle> = app_handle.state();
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Unable to access the embedding helper stdin.".to_string())?;
-    if let Err(err) = stdin.write_all(&input) {
-        drop(stdin);
-        let message = enrich_embedding_helper_error(
-            child,
-            format!("Unable to send data to the embedding helper: {err}"),
-        );
-        emit_embedding_error(app_handle, total_rows, &message);
-        return Err(message);
-    }
-    if let Err(err) = stdin.flush() {
-        drop(stdin);
-        let message = enrich_embedding_helper_error(
-            child,
-            format!("Unable to flush embedding helper input: {err}"),
-        );
-        emit_embedding_error(app_handle, total_rows, &message);
-        return Err(message);
-    }
-    drop(stdin);
+    let result = (|| {
+        let mut guard = helper_state
+            .process
+            .lock()
+            .map_err(|_| "Unable to lock embedding helper state.".to_string())?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Unable to access the embedding helper stdout.".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Unable to access the embedding helper stderr.".to_string())?;
-
-    let stdout_handle = std::thread::spawn(move || -> Result<Vec<u8>, String> {
-        let mut buffer = Vec::new();
-        let mut reader = BufReader::new(stdout);
-        reader
-            .read_to_end(&mut buffer)
-            .map_err(|err| format!("Unable to read embedding helper stdout: {err}"))?;
-        Ok(buffer)
-    });
-
-    let app_handle_for_progress = app_handle.clone();
-    let total_rows_for_progress = total_rows;
-    let stderr_handle = std::thread::spawn(move || -> Result<Vec<u8>, String> {
-        let mut reader = BufReader::new(stderr);
-        let mut buffer = Vec::new();
-
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    if let Some(json_str) = line.strip_prefix("PROGRESS ") {
-                        match serde_json::from_str::<EmbeddingProgressUpdate>(json_str.trim()) {
-                            Ok(mut update) => {
-                                if update.total_rows == 0 {
-                                    update.total_rows = total_rows_for_progress;
-                                }
-                                emit_faculty_embedding_progress(&app_handle_for_progress, update);
-                            }
-                            Err(_) => {
-                                buffer.extend_from_slice(line.as_bytes());
-                            }
-                        }
-                    } else {
-                        buffer.extend_from_slice(line.as_bytes());
-                    }
-                }
-                Err(err) => {
-                    return Err(format!("Unable to read embedding helper stderr: {err}"));
-                }
+        if let Some(process) = guard.as_mut() {
+            if !process.is_running() {
+                process.shutdown();
+                *guard = None;
             }
         }
 
-        Ok(buffer)
-    });
-
-    let status = child
-        .wait()
-        .map_err(|err| format!("Unable to wait for the embedding helper: {err}"))?;
-
-    let stdout_bytes = match stdout_handle.join() {
-        Ok(result) => result?,
-        Err(_) => {
-            return Err("Unable to join the embedding helper stdout reader.".into());
+        if guard.is_none() {
+            let process = EmbeddingHelperProcess::spawn(app_handle)?;
+            *guard = Some(process);
         }
-    };
 
-    let stderr_bytes = match stderr_handle.join() {
-        Ok(result) => result?,
-        Err(_) => {
-            return Err("Unable to join the embedding helper stderr reader.".into());
+        let response = guard.as_mut().unwrap().send_embedding_request(payload);
+
+        if response.is_err() {
+            if let Some(mut process) = guard.take() {
+                process.shutdown();
+            }
         }
-    };
 
-    if !status.success() {
-        let message = String::from_utf8_lossy(&stderr_bytes);
-        let trimmed = message.trim();
-        let error_message = if trimmed.is_empty() {
-            "The embedding helper exited with an error.".to_string()
-        } else {
-            trimmed.to_string()
-        };
-        emit_embedding_error(app_handle, total_rows, &error_message);
-        return Err(error_message);
+        response
+    })();
+
+    if let Err(err) = &result {
+        emit_embedding_error(app_handle, total_rows, err);
     }
 
-    if stdout_bytes.is_empty() {
-        let stderr_message = String::from_utf8_lossy(&stderr_bytes);
-        let trimmed = stderr_message.trim();
-        let error_message = if trimmed.is_empty() {
-            "The embedding helper did not produce any output.".to_string()
-        } else {
-            trimmed.to_string()
-        };
-        emit_embedding_error(app_handle, total_rows, &error_message);
-        return Err(error_message);
-    }
-
-    match serde_json::from_slice(&stdout_bytes) {
-        Ok(response) => Ok(response),
-        Err(err) => {
-            let stderr_message = String::from_utf8_lossy(&stderr_bytes);
-            let trimmed = stderr_message.trim();
-            let error_message = if trimmed.is_empty() {
-                format!("Unable to parse embedding helper output: {err}")
-            } else {
-                format!(
-                    "Unable to parse embedding helper output: {err}. Details: {}",
-                    trimmed
-                )
-            };
-            emit_embedding_error(app_handle, total_rows, &error_message);
-            Err(error_message)
-        }
-    }
+    result
 }
 
-fn enrich_embedding_helper_error(child: Child, base_message: String) -> String {
-    match child.wait_with_output() {
-        Ok(output) => {
-            let mut message = base_message;
+fn ensure_embedding_helper_spawned(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    let helper_state: tauri::State<EmbeddingHelperHandle> = app_handle.state();
+    let mut guard = helper_state
+        .process
+        .lock()
+        .map_err(|_| "Unable to lock embedding helper state.".to_string())?;
 
-            let stderr_text = String::from_utf8_lossy(&output.stderr);
-            let stderr_trimmed = stderr_text.trim_end();
-            if !stderr_trimmed.is_empty() {
-                message = format!(
-                    "{message}\n\nEmbedding helper stderr:\n{stderr_trimmed}"
-                );
-            }
-
-            let stdout_text = String::from_utf8_lossy(&output.stdout);
-            let stdout_trimmed = stdout_text.trim_end();
-            if !stdout_trimmed.is_empty() {
-                message = format!(
-                    "{message}\n\nEmbedding helper stdout:\n{stdout_trimmed}"
-                );
-            }
-
-            format!(
-                "{message}\n\nEmbedding helper exit status: {status}",
-                status = output.status
-            )
+    if let Some(process) = guard.as_mut() {
+        if process.is_running() {
+            return Ok(());
         }
-        Err(err) => format!(
-            "{base_message}\n\nAdditionally, the embedding helper output could not be captured: {err}"
-        ),
+        process.shutdown();
+        *guard = None;
     }
+
+    let process = EmbeddingHelperProcess::spawn(app_handle)?;
+    *guard = Some(process);
+    Ok(())
+}
+
+fn warm_up_embedding_helper(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    ensure_embedding_helper_spawned(app_handle)?;
+    let helper_state: tauri::State<EmbeddingHelperHandle> = app_handle.state();
+    let mut guard = helper_state
+        .process
+        .lock()
+        .map_err(|_| "Unable to lock embedding helper state.".to_string())?;
+
+    if let Some(process) = guard.as_mut() {
+        process.send_preload_request(DEFAULT_EMBEDDING_MODEL)?;
+    }
+
+    Ok(())
 }
 
 struct BundledPythonRuntime {
@@ -3121,166 +3370,7 @@ fn locate_bundled_python_runtime(
     ))
 }
 
-const PYTHON_EMBEDDING_HELPER: &str = r#"
-import json
-import os
-import sys
-import time
-
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-try:
-    from transformers import AutoModel, AutoTokenizer
-    from transformers.utils import logging as hf_logging
-except ImportError as exc:
-    sys.stderr.write("Install the 'transformers' package (with torch) to generate embeddings.\n")
-    sys.stderr.write(str(exc) + "\n")
-    sys.exit(1)
-
-try:
-    import torch
-except ImportError as exc:
-    sys.stderr.write("Install the 'torch' package to generate embeddings.\n")
-    sys.stderr.write(str(exc) + "\n")
-    sys.exit(1)
-
-hf_logging.set_verbosity_error()
-
-
-def emit_progress(payload: dict) -> None:
-    sys.stderr.write("PROGRESS " + json.dumps(payload) + "\n")
-    sys.stderr.flush()
-
-
-def main():
-    try:
-        payload = json.load(sys.stdin)
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"Unable to parse embedding request: {exc}\n")
-        sys.exit(1)
-
-    model_name = payload.get("model") or "NeuML/pubmedbert-base-embeddings"
-    texts = payload.get("texts") or []
-    total = len(texts)
-
-    raw_label = payload.get("itemLabel")
-    raw_plural = payload.get("itemLabelPlural")
-
-    if isinstance(raw_label, str):
-        raw_label = raw_label.strip()
-    else:
-        raw_label = ""
-
-    if isinstance(raw_plural, str):
-        raw_plural = raw_plural.strip()
-    else:
-        raw_plural = ""
-
-    singular_label = raw_label or "text entry"
-    if raw_plural:
-        plural_label = raw_plural
-    elif singular_label.endswith("s"):
-        plural_label = singular_label
-    else:
-        plural_label = singular_label + "s"
-
-    label_for_total = singular_label if total == 1 else plural_label
-
-    if not texts:
-        json.dump({"model": model_name, "dimension": 0, "rows": []}, sys.stdout)
-        return
-
-    emit_progress(
-        {
-            "phase": "loading-model",
-            "message": "Loading PubMedBERT model…",
-            "processedRows": 0,
-            "totalRows": total,
-        }
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-    model.eval()
-
-    emit_progress(
-        {
-            "phase": "embedding",
-            "message": f"Starting embeddings for {total} {label_for_total}…",
-            "processedRows": 0,
-            "totalRows": total,
-            "elapsedSeconds": 0.0,
-        }
-    )
-
-    start_time = time.time()
-
-    rows = []
-    for item in texts:
-        text = (item.get("text") or "").strip()
-        if not text:
-            continue
-
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-            padding=True,
-        )
-
-        with torch.no_grad():
-            outputs = model(**inputs)
-
-        last_hidden = outputs.last_hidden_state
-        attention_mask = inputs["attention_mask"]
-        mask = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
-        masked = last_hidden * mask
-        summed = masked.sum(dim=1)
-        counts = mask.sum(dim=1).clamp(min=1e-9)
-        embedding = (summed / counts).squeeze(0)
-
-        rows.append({"id": item.get("id"), "embedding": embedding.tolist()})
-
-        processed = len(rows)
-        elapsed = time.time() - start_time
-        remaining = None
-        if processed < total and processed > 0 and elapsed > 0:
-            remaining = (total - processed) * (elapsed / processed)
-
-        emit_progress(
-            {
-                "phase": "embedding",
-                "message": f"Embedded {processed} of {total} {label_for_total}",
-                "processedRows": processed,
-                "totalRows": total,
-                "elapsedSeconds": elapsed,
-                "estimatedRemainingSeconds": remaining,
-            }
-        )
-
-    result = {
-        "model": model_name,
-        "dimension": len(rows[0]["embedding"]) if rows else 0,
-        "rows": rows,
-    }
-
-    emit_progress(
-        {
-            "phase": "finalizing",
-            "message": "Finalizing embedding response…",
-            "processedRows": len(rows),
-            "totalRows": total,
-            "elapsedSeconds": time.time() - start_time,
-        }
-    )
-
-    json.dump(result, sys.stdout)
-
-
-if __name__ == "__main__":
-    main()
-"#;
+const PYTHON_EMBEDDING_HELPER: &str = include_str!("../../python/embedding_helper.py");
 
 #[tauri::command]
 fn get_faculty_dataset_status(
@@ -4732,6 +4822,16 @@ fn build_summary(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(EmbeddingHelperHandle::default())
+        .setup(|app| {
+            let app_handle = app.handle();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(err) = warm_up_embedding_helper(&app_handle) {
+                    eprintln!("⚠️ Unable to warm up the embedding helper: {err}");
+                }
+            });
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
