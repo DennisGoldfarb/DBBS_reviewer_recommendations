@@ -32,5 +32,5 @@ pdf-extract = "0.9"
 rtf-parser = "0.4"
 rust_xlsxwriter = "0.68"
 base64 = "0.22"
-async-channel = "1.9"
+tokio = { version = "1", features = ["sync"] }
 

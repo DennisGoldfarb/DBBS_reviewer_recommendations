@@ -1,4 +1,3 @@
-use async_channel::Receiver;
 use base64::{engine::general_purpose::STANDARD as Base64Engine, Engine as _};
 use calamine::{open_workbook_auto, DataType, Reader};
 use chrono::{DateTime, Utc};
@@ -16,7 +15,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
@@ -24,6 +23,7 @@ use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent, TerminatedPayload},
     ShellExt,
 };
+use tokio::sync::mpsc::Receiver;
 
 const FACULTY_DATASET_BASENAME: &str = "faculty_dataset";
 const FACULTY_DATASET_DEFAULT_EXTENSION: &str = "tsv";
@@ -1719,7 +1719,7 @@ fn build_matches_workbook(
 ) -> Result<Vec<u8>, String> {
     let mut workbook = Workbook::new();
     let matches_sheet_name = "Matches";
-    let mut matches_sheet = workbook.add_worksheet();
+    let matches_sheet = workbook.add_worksheet();
     matches_sheet
         .set_name(matches_sheet_name)
         .map_err(|err| format!("Unable to configure the matches worksheet: {err}"))?;
@@ -1806,7 +1806,7 @@ fn build_matches_workbook(
     student_summary_headers.push("Total first reviewers".into());
     student_summary_headers.push("Total reviewers".into());
 
-    let mut student_summary_sheet = workbook.add_worksheet();
+    let student_summary_sheet = workbook.add_worksheet();
     student_summary_sheet
         .set_name("Student Summary")
         .map_err(|err| format!("Unable to configure the student summary worksheet: {err}"))?;
@@ -1914,7 +1914,7 @@ fn build_matches_workbook(
     faculty_summary_headers.push("First reviewer count".into());
     faculty_summary_headers.push("Total reviewer count".into());
 
-    let mut faculty_summary_sheet = workbook.add_worksheet();
+    let faculty_summary_sheet = workbook.add_worksheet();
     faculty_summary_sheet
         .set_name("Faculty Summary")
         .map_err(|err| format!("Unable to configure the faculty summary worksheet: {err}"))?;
@@ -2933,20 +2933,21 @@ fn collect_sidecar_output(
 
     loop {
         match tauri::async_runtime::block_on(rx.recv()) {
-            Ok(CommandEvent::Stdout(bytes)) => stdout.extend_from_slice(&bytes),
-            Ok(CommandEvent::Stderr(bytes)) => {
+            Some(CommandEvent::Stdout(bytes)) => stdout.extend_from_slice(&bytes),
+            Some(CommandEvent::Stderr(bytes)) => {
                 if !emit_progress_from_line(app_handle, total_rows, &bytes) {
                     stderr.extend_from_slice(&bytes);
                 }
             }
-            Ok(CommandEvent::Terminated(payload)) => {
+            Some(CommandEvent::Terminated(payload)) => {
                 termination = Some(payload);
                 break;
             }
-            Ok(CommandEvent::Error(err)) => {
+            Some(CommandEvent::Error(err)) => {
                 return Err(format!("Unable to read embedding helper output: {err}"));
             }
-            Err(_) => break,
+            Some(_) => {}
+            None => break,
         }
     }
 
