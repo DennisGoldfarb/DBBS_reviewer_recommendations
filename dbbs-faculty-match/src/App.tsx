@@ -468,6 +468,12 @@ function App() {
       }
 
       setIsUpdatingEmbeddings(true);
+      setEmbeddingProgress({
+        phase: "initializing",
+        message: "Loading embedding program…",
+        processedRows: 0,
+        totalRows: 0,
+      });
       setEmbeddingStatus(null);
 
       try {
