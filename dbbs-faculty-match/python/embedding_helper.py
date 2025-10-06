@@ -133,6 +133,7 @@ def main() -> None:
     start_time = time.time()
 
     rows = []
+    skipped_rows = []
     for index, item in enumerate(texts):
         if isinstance(item, Mapping):
             row_id = item.get("id")
@@ -142,16 +143,71 @@ def main() -> None:
             raw_text = item
 
         text = normalize_text_value(raw_text)
+        if isinstance(row_id, int):
+            identifier = row_id
+        else:
+            try:
+                identifier = int(str(row_id))
+            except (TypeError, ValueError):
+                identifier = index
+
+        if not isinstance(text, str):
+            text = str(text)
+
+        text = text.strip()
+
         if not text:
+            skipped_rows.append({
+                "id": identifier,
+                "reason": "empty-text",
+            })
+            sys.stderr.write(
+                f"WARNING Skipping row {identifier}: empty text value\n"
+            )
+            sys.stderr.flush()
+            emit_progress(
+                {
+                    "phase": "embedding",
+                    "message": f"Skipped row {identifier}: empty text value",
+                    "processedRows": len(rows),
+                    "totalRows": total,
+                    "elapsedSeconds": time.time() - start_time,
+                    "skippedRows": len(skipped_rows),
+                }
+            )
             continue
 
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-            padding=True,
-        )
+        try:
+            inputs = tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=512,
+                padding=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            reason = str(exc).splitlines()[0]
+            skipped_rows.append(
+                {
+                    "id": identifier,
+                    "reason": f"tokenizer-error: {reason}",
+                }
+            )
+            sys.stderr.write(
+                f"WARNING Skipping row {identifier}: unable to tokenize ({reason})\n"
+            )
+            sys.stderr.flush()
+            emit_progress(
+                {
+                    "phase": "embedding",
+                    "message": f"Skipped row {identifier}: unable to tokenize",
+                    "processedRows": len(rows),
+                    "totalRows": total,
+                    "elapsedSeconds": time.time() - start_time,
+                    "skippedRows": len(skipped_rows),
+                }
+            )
+            continue
 
         with torch.no_grad():
             outputs = model(**inputs)
@@ -164,14 +220,6 @@ def main() -> None:
         counts = mask.sum(dim=1).clamp(min=1e-9)
         embedding = (summed / counts).squeeze(0)
 
-        if isinstance(row_id, int):
-            identifier = row_id
-        else:
-            try:
-                identifier = int(str(row_id))
-            except (TypeError, ValueError):
-                identifier = index
-
         rows.append({"id": identifier, "embedding": embedding.tolist()})
 
         processed = len(rows)
@@ -183,11 +231,19 @@ def main() -> None:
         emit_progress(
             {
                 "phase": "embedding",
-                "message": f"Embedded {processed} of {total} {label_for_total}",
+                "message": (
+                    f"Embedded {processed} of {total} {label_for_total}"
+                    + (
+                        f" ({len(skipped_rows)} skipped)"
+                        if skipped_rows
+                        else ""
+                    )
+                ),
                 "processedRows": processed,
                 "totalRows": total,
                 "elapsedSeconds": elapsed,
                 "estimatedRemainingSeconds": remaining,
+                "skippedRows": len(skipped_rows),
             }
         )
 
@@ -197,6 +253,9 @@ def main() -> None:
         "rows": rows,
     }
 
+    if skipped_rows:
+        result["skippedRows"] = skipped_rows
+
     emit_progress(
         {
             "phase": "finalizing",
@@ -204,6 +263,7 @@ def main() -> None:
             "processedRows": len(rows),
             "totalRows": total,
             "elapsedSeconds": time.time() - start_time,
+            "skippedRows": len(skipped_rows),
         }
     )
 
