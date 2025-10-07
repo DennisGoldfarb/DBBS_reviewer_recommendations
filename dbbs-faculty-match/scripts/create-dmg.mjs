@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, access, mkdir, unlink, cp, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, access, mkdir, cp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,7 +67,7 @@ async function ensureApplicationsShortcut(applicationsLink, stagingDir) {
   }
 }
 
-export async function buildDmg({ debug }) {
+export async function buildDmg({ debug = false, dmgPath: providedDmgPath, volumeName } = {}) {
   if (process.platform !== 'darwin') {
     return;
   }
@@ -95,17 +95,13 @@ export async function buildDmg({ debug }) {
     return;
   }
 
-  const dmgDir = path.join(bundleDir, 'dmg');
-  await mkdir(dmgDir, { recursive: true });
+  const defaultDmgDir = path.join(bundleDir, 'dmg');
+  const dmgPath = providedDmgPath
+    ? path.resolve(providedDmgPath)
+    : path.join(defaultDmgDir, `${productName}_${version}_${resolveArch()}.dmg`);
 
-  const dmgPath = path.join(dmgDir, `${productName}_${version}_${resolveArch()}.dmg`);
-  try {
-    await unlink(dmgPath);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
+  await mkdir(path.dirname(dmgPath), { recursive: true });
+  await rm(dmgPath, { force: true });
 
   const stagingDir = await mkdtemp(path.join(os.tmpdir(), 'dbbs-faculty-match-dmg-'));
   const stagedAppPath = path.join(stagingDir, `${productName}.app`);
@@ -117,7 +113,7 @@ export async function buildDmg({ debug }) {
   const hdiutilArgs = [
     'create',
     '-volname',
-    productName,
+    volumeName ?? productName,
     '-fs',
     'HFS+',
     '-srcfolder',
@@ -134,5 +130,73 @@ export async function buildDmg({ debug }) {
     console.log(`Created DMG at ${dmgPath}`);
   } finally {
     await rm(stagingDir, { recursive: true, force: true });
+  }
+
+  return dmgPath;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const cliArgs = process.argv.slice(2);
+  let debug = false;
+  let dmgPath;
+  let volumeName;
+
+  const requireValue = (name, currentIndex) => {
+    const nextValue = cliArgs[currentIndex + 1];
+    if (typeof nextValue === 'undefined') {
+      console.error(`Missing value for ${name}`);
+      process.exit(1);
+    }
+
+    return nextValue;
+  };
+
+  for (let index = 0; index < cliArgs.length; index += 1) {
+    const arg = cliArgs[index];
+
+    if (arg === '--debug') {
+      debug = true;
+      continue;
+    }
+
+    if (arg === '--release') {
+      debug = false;
+      continue;
+    }
+
+    if (arg.startsWith('--dmg-path=')) {
+      dmgPath = arg.slice('--dmg-path='.length);
+      continue;
+    }
+
+    if (arg === '--dmg-path') {
+      dmgPath = requireValue('--dmg-path', index);
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--volume-name=')) {
+      volumeName = arg.slice('--volume-name='.length);
+      continue;
+    }
+
+    if (arg === '--volume-name') {
+      volumeName = requireValue('--volume-name', index);
+      index += 1;
+      continue;
+    }
+
+    console.error(`Unknown argument: ${arg}`);
+    process.exit(1);
+  }
+
+  try {
+    const resultPath = await buildDmg({ debug, dmgPath, volumeName });
+    if (resultPath) {
+      console.log(`DMG created at ${resultPath}`);
+    }
+  } catch (error) {
+    console.error('Failed to create DMG:', error);
+    process.exit(1);
   }
 }
