@@ -395,8 +395,48 @@ jobs:
             exit 1
           fi
 
+          embedding_helper_entitlements="dbbs-faculty-match/src-tauri/macos/embedding-helper.entitlements"
+          if [[ ! -f "$embedding_helper_entitlements" ]]; then
+            echo "Entitlements file not found at $embedding_helper_entitlements" >&2
+            exit 1
+          fi
+
+          echo "Locating embedding helper binaries inside $app_bundle"
+          embedding_helpers=()
+          while IFS= read -r -d '' candidate; do
+            if file "$candidate" | grep -q 'Mach-O'; then
+              embedding_helpers+=("$candidate")
+            fi
+          done < <(find "$app_bundle/Contents" -type f -perm -111 -name 'embedding-helper*' -print0)
+
+          if [[ ${#embedding_helpers[@]} -eq 0 ]]; then
+            echo "Embedding helper binary not found inside $app_bundle" >&2
+            exit 1
+          fi
+
+          for embedding_helper_path in "${embedding_helpers[@]}"; do
+            echo "Applying entitlements to $(basename "$embedding_helper_path") at $embedding_helper_path"
+            codesign --force --options runtime --timestamp \
+              --entitlements "$embedding_helper_entitlements" \
+              --sign "$identity" \
+              "$embedding_helper_path"
+          done
+
+          is_embedding_helper() {
+            local path="$1"
+            for helper in "${embedding_helpers[@]}"; do
+              if [[ "$path" == "$helper" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
           echo "Signing individual binaries inside $app_bundle"
           while IFS= read -r -d '' executable; do
+            if is_embedding_helper "$executable"; then
+              continue
+            fi
             echo "  Signing $(basename "$executable")"
             codesign --force --options runtime --timestamp --sign "$identity" "$executable"
           done < <(find "$app_bundle/Contents" \
@@ -509,20 +549,109 @@ jobs:
             echo "DMG_PATH environment variable is not set" >&2
             exit 1
           fi
-          xcrun notarytool store-credentials notary-profile \
+          profile_name="notary-profile"
+
+          run_with_retry() {
+            local attempts=$1
+            local delay=$2
+            shift 2
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if (( attempt >= attempts )); then
+                return 1
+              fi
+              echo "Command failed (attempt ${attempt}/${attempts}). Retrying in ${delay}s..." >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          if ! run_with_retry 3 15 xcrun notarytool store-credentials "$profile_name" \
             --apple-id "$NOTARIZE_APPLE_ID" \
             --team-id "$NOTARIZE_TEAM_ID" \
-            --password "$NOTARIZE_PASSWORD"
-          result=$(xcrun notarytool submit "$dmg_path" \
-            --keychain-profile notary-profile \
-            --wait --output-format json)
-          status=$(echo "$result" | jq -r '.status')
-          submission_id=$(echo "$result" | jq -r '.id')
-          if [[ "$status" != "Accepted" ]]; then
-            echo "Notarization failed: $status" >&2
-            if [[ -n "$submission_id" && "$submission_id" != "null" ]]; then
-              xcrun notarytool log "$submission_id" --keychain-profile notary-profile || true
+            --password "$NOTARIZE_PASSWORD"; then
+            echo "Failed to store notarization credentials after multiple attempts" >&2
+            exit 1
+          fi
+
+          submission_json=""
+          max_submit_attempts=3
+          submit_delay=30
+          attempt=1
+          while (( attempt <= max_submit_attempts )); do
+            if submission_json=$(xcrun notarytool submit "$dmg_path" \
+              --keychain-profile "$profile_name" \
+              --output-format json); then
+              break
             fi
+            exit_code=$?
+            if (( attempt == max_submit_attempts )); then
+              echo "Notarization submission failed after ${max_submit_attempts} attempts" >&2
+              exit "$exit_code"
+            fi
+            echo "Submit attempt ${attempt} failed (exit code ${exit_code}). Retrying in ${submit_delay}s..." >&2
+            sleep "$submit_delay"
+            attempt=$((attempt + 1))
+          done
+
+          submission_id=$(echo "$submission_json" | jq -r '.id // empty')
+          if [[ -z "$submission_id" || "$submission_id" == "null" ]]; then
+            echo "Could not determine notarization submission ID" >&2
+            echo "$submission_json" >&2
+            exit 1
+          fi
+          echo "Notarization submission ID: $submission_id"
+
+          poll_interval=30
+          status=""
+          deadline=$((SECONDS + 7200))
+          while (( SECONDS < deadline )); do
+            info_json=""
+            info_success=0
+            for info_attempt in 1 2 3; do
+              if info_json=$(xcrun notarytool info "$submission_id" \
+                --keychain-profile "$profile_name" \
+                --output-format json); then
+                info_success=1
+                break
+              fi
+              exit_code=$?
+              echo "Status check attempt ${info_attempt} failed (exit code ${exit_code})." >&2
+              if (( info_attempt < 3 )); then
+                echo "Retrying status check in ${poll_interval}s..." >&2
+                sleep "$poll_interval"
+              fi
+            done
+
+            if (( info_success == 0 )); then
+              echo "Unable to retrieve notarization status after multiple attempts; will retry..." >&2
+              sleep "$poll_interval"
+              continue
+            fi
+
+            status=$(echo "$info_json" | jq -r '.status // empty')
+            if [[ "$status" == "Accepted" ]]; then
+              echo "Notarization accepted."
+              break
+            fi
+
+            if [[ "$status" == "In Progress" ]]; then
+              echo "Notarization still in progress; waiting ${poll_interval}s before checking again..."
+              sleep "$poll_interval"
+              continue
+            fi
+
+            echo "Notarization failed with status: ${status:-unknown}" >&2
+            xcrun notarytool log "$submission_id" --keychain-profile "$profile_name" || true
+            exit 1
+          done
+
+          if [[ "$status" != "Accepted" ]]; then
+            echo "Notarization did not complete within the allotted time" >&2
+            xcrun notarytool log "$submission_id" --keychain-profile "$profile_name" || true
             exit 1
           fi
       - name: Staple notarization ticket to DMG
