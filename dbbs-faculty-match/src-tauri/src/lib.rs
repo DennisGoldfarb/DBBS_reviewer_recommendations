@@ -2820,9 +2820,13 @@ impl EmbeddingHelperManager {
 
     fn write_with_newline(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         if let Some(child) = self.child.as_mut() {
-            child.write_all(bytes)?;
-            child.write_all(b"\n")?;
-            child.flush()
+            let mut payload = Vec::with_capacity(bytes.len() + 1);
+            payload.extend_from_slice(bytes);
+            payload.push(b'\n');
+
+            child
+                .write(&payload)
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.to_string()))
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -2848,8 +2852,7 @@ impl EmbeddingHelperManager {
 
     fn shutdown(&mut self) {
         if let Some(child) = self.child.as_mut() {
-            let _ = child.write_all(b"{\"command\":\"shutdown\"}\n");
-            let _ = child.flush();
+            let _ = child.write(b"{\"command\":\"shutdown\"}\n");
         }
 
         if let Some(receiver) = self.receiver.as_mut() {
