@@ -37,6 +37,36 @@ function resolveArch() {
   }
 }
 
+async function ensureApplicationsShortcut(applicationsLink, stagingDir) {
+  await rm(applicationsLink, { force: true, recursive: true });
+
+  const finderScriptLines = [
+    'tell application "Finder"',
+    `  set dmgFolder to POSIX file ${JSON.stringify(stagingDir)}`,
+    '  try',
+    '    delete every item of dmgFolder whose name is "Applications"',
+    '  end try',
+    '  set newAlias to make alias file at dmgFolder to POSIX file "/Applications"',
+    '  set name of newAlias to "Applications"',
+    'end tell',
+  ];
+
+  try {
+    const finderArgs = finderScriptLines.flatMap((line) => ['-e', line]);
+    await exec('osascript', finderArgs);
+  } catch (finderError) {
+    console.warn('Failed to create Finder alias for Applications shortcut. Falling back to symlink.', finderError);
+
+    try {
+      await symlink('/Applications', applicationsLink);
+    } catch (symlinkError) {
+      if (symlinkError.code !== 'EEXIST') {
+        throw symlinkError;
+      }
+    }
+  }
+}
+
 export async function buildDmg({ debug }) {
   if (process.platform !== 'darwin') {
     return;
@@ -82,13 +112,7 @@ export async function buildDmg({ debug }) {
   await cp(appBundlePath, stagedAppPath, { recursive: true });
 
   const applicationsLink = path.join(stagingDir, 'Applications');
-  try {
-    await symlink('/Applications', applicationsLink);
-  } catch (error) {
-    if (error.code !== 'EEXIST') {
-      throw error;
-    }
-  }
+  await ensureApplicationsShortcut(applicationsLink, stagingDir);
 
   const hdiutilArgs = [
     'create',
