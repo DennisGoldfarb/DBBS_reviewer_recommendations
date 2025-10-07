@@ -376,7 +376,31 @@ jobs:
             exit 1
           fi
           security list-keychains -d user -s "$keychain_path" login.keychain
-          security find-identity -v -p codesigning "$keychain_path" || true
+          declare -a search_targets=("$keychain_path")
+          if [[ "$keychain_path" == *.keychain-db ]]; then
+            search_targets+=("${keychain_path%.keychain-db}.keychain")
+          fi
+          search_targets+=("")
+
+          identities_found=0
+          for target in "${search_targets[@]}"; do
+            if [[ -n "$target" ]]; then
+              echo "Querying signing identities in $target"
+              output=$(security find-identity -v -p codesigning "$target" 2>&1 || true)
+            else
+              echo "Querying signing identities from the default keychain search list"
+              output=$(security find-identity -v -p codesigning 2>&1 || true)
+            fi
+            printf '%s\n' "$output"
+            if grep -Eq '^[[:space:]]*[0-9]+\)' <<<"$output"; then
+              identities_found=1
+              break
+            fi
+          done
+
+          if [[ $identities_found -eq 0 ]]; then
+            echo "No signing identities reported by security find-identity" >&2
+          fi
 
       - name: Resolve codesign identity
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
@@ -392,15 +416,41 @@ jobs:
           fi
 
           identities=()
-          while IFS= read -r line; do
-            entry=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/')
-            if [[ "$entry" == *"|"* ]]; then
-              identities+=("$entry")
+
+          collect_identities() {
+            local target="$1"
+            local output
+            if [[ -n "$target" ]]; then
+              echo "Attempting to resolve signing identities in $target"
+              output=$(security find-identity -v -p codesigning "$target" 2>&1 || true)
+            else
+              echo "Attempting to resolve signing identities from the default keychain search list"
+              output=$(security find-identity -v -p codesigning 2>&1 || true)
             fi
-          done < <(security find-identity -v -p codesigning "$keychain_path" || true)
+            printf '%s\n' "$output"
+            while IFS= read -r line; do
+              entry=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/')
+              if [[ "$entry" == *"|"* ]]; then
+                identities+=("$entry")
+              fi
+            done <<<"$output"
+          }
+
+          declare -a search_targets=("$keychain_path")
+          if [[ "$keychain_path" == *.keychain-db ]]; then
+            search_targets+=("${keychain_path%.keychain-db}.keychain")
+          fi
+          search_targets+=("")
+
+          for target in "${search_targets[@]}"; do
+            collect_identities "$target"
+            if [[ ${#identities[@]} -gt 0 ]]; then
+              break
+            fi
+          done
 
           if [[ ${#identities[@]} -eq 0 ]]; then
-            echo "No signing identities available in $keychain_path" >&2
+            echo "No signing identities available in the signing keychain or default search list" >&2
             exit 1
           fi
 
