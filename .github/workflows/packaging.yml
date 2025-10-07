@@ -45,10 +45,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install DMG tooling (macOS)
-        if: runner.os == 'macOS'
-        run: brew install create-dmg
-
       - name: Use short Cargo target dir (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -226,10 +222,6 @@ jobs:
         run: npm ci
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install DMG tooling (macOS)
-        if: runner.os == 'macOS'
-        run: brew install create-dmg
 
       - name: Install the Apple certificate and provisioning profile
         if: runner.os == 'macOS'
@@ -506,7 +498,9 @@ jobs:
           dmg_path="$dmg_dir/$dmg_name"
 
           echo "Creating DMG $dmg_path from $app_bundle"
-          create-dmg --volname "DBBS Faculty Match" "$dmg_path" "$app_bundle"
+          node dbbs-faculty-match/scripts/create-dmg.mjs \
+            --dmg-path "$dmg_path" \
+            --volume-name "DBBS Faculty Match"
           if [[ ! -f "$dmg_path" ]]; then
             echo "Failed to create DMG at $dmg_path" >&2
             exit 1
