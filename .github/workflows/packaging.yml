@@ -337,6 +337,7 @@ jobs:
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
         env:
           KEYCHAIN_PATH_OUTPUT: ${{ steps.import-certs.outputs.keychain-path }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -350,6 +351,17 @@ jobs:
             ls -al "$HOME/Library/Keychains" >&2 || true
             exit 1
           fi
+
+          if [[ -z "${MACOS_CERT_PASSWORD:-}" ]]; then
+            echo "MACOS_CERT_PASSWORD secret must be provided to unlock signing keychain" >&2
+            exit 1
+          fi
+
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_CERT_PASSWORD" "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$MACOS_CERT_PASSWORD" "$keychain_path" >/dev/null
+          security list-keychains -d user -s "$keychain_path" login.keychain
+
           echo "Using signing keychain at $keychain_path"
           echo "KEYCHAIN_PATH=$keychain_path" >>"$GITHUB_ENV"
 
@@ -365,6 +377,81 @@ jobs:
           fi
           security list-keychains -d user -s "$keychain_path" login.keychain
           security find-identity -v -p codesigning "$keychain_path" || true
+
+      - name: Resolve codesign identity
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        env:
+          PROVIDED_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain_path="${KEYCHAIN_PATH:-}"
+          if [[ -z "$keychain_path" ]]; then
+            echo "KEYCHAIN_PATH environment variable is not set" >&2
+            exit 1
+          fi
+
+          mapfile -t identities < <(security find-identity -v -p codesigning "$keychain_path" | \
+            sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/' || true)
+          if [[ ${#identities[@]} -eq 0 ]]; then
+            echo "No signing identities available in $keychain_path" >&2
+            exit 1
+          fi
+
+          provided="${PROVIDED_IDENTITY:-}"
+          provided_lower="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
+          resolved=""
+          resolved_label=""
+
+          for entry in "${identities[@]}"; do
+            fingerprint="${entry%%|*}"
+            label="${entry#*|}"
+            if [[ -z "$fingerprint" ]]; then
+              continue
+            fi
+            if [[ -n "$provided" ]]; then
+              fp_lower="$(printf '%s' "$fingerprint" | tr '[:upper:]' '[:lower:]')"
+              if [[ "$fp_lower" == "$provided_lower" ]]; then
+                resolved="$fingerprint"
+                resolved_label="$label"
+                break
+              fi
+              label_lower="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+              if [[ "$label_lower" == "$provided_lower" ]]; then
+                resolved="$fingerprint"
+                resolved_label="$label"
+                break
+              fi
+            fi
+          done
+
+          if [[ -z "$resolved" ]]; then
+            IFS='|' read -r resolved resolved_label <<<"${identities[0]}"
+          fi
+
+          if [[ -z "$resolved" ]]; then
+            echo "Failed to resolve a codesign identity" >&2
+            exit 1
+          fi
+
+          if [[ -n "$provided" ]]; then
+            resolved_lower="$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$resolved_lower" != "$provided_lower" ]]; then
+              echo "Provided codesign identity secret did not match any available identities; using $resolved instead" >&2
+            fi
+          fi
+
+          echo "Resolved codesign identity fingerprint $resolved"
+          if [[ -n "$resolved_label" ]]; then
+            echo "Using identity label: $resolved_label"
+          fi
+
+          {
+            echo "CODESIGN_IDENTITY_RESOLVED=$resolved"
+            if [[ -n "$resolved_label" ]]; then
+              echo "CODESIGN_IDENTITY_LABEL=$resolved_label"
+            fi
+          } >>"$GITHUB_ENV"
 
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
@@ -418,8 +505,6 @@ jobs:
 
       - name: Codesign macOS disk image
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
-        env:
-          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -433,7 +518,16 @@ jobs:
             echo "KEYCHAIN_PATH environment variable is not set" >&2
             exit 1
           fi
-          codesign --force --timestamp --sign "$CODESIGN_IDENTITY" --keychain "$keychain_path" "$dmg_path"
+          identity="${CODESIGN_IDENTITY_RESOLVED:-}"
+          if [[ -z "$identity" ]]; then
+            echo "CODESIGN_IDENTITY_RESOLVED environment variable is not set" >&2
+            exit 1
+          fi
+          echo "Signing $dmg_path with identity $identity"
+          if [[ -n "${CODESIGN_IDENTITY_LABEL:-}" ]]; then
+            echo "Identity label: ${CODESIGN_IDENTITY_LABEL}"
+          fi
+          codesign --force --timestamp --sign "$identity" --keychain "$keychain_path" "$dmg_path"
           codesign --verify --verbose "$dmg_path"
 
       - name: Notarize macOS disk image
