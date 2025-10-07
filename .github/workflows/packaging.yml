@@ -436,18 +436,13 @@ jobs:
             echo "DMG_PATH environment variable is not set" >&2
             exit 1
           fi
-          keychain_path="${KEYCHAIN_PATH:-}"
-          if [[ -z "$keychain_path" ]]; then
-            echo "KEYCHAIN_PATH environment variable is not set" >&2
-            exit 1
-          fi
           identity="${CODESIGN_IDENTITY:-}"
           if [[ -z "$identity" ]]; then
             echo "CODESIGN_IDENTITY secret must be provided" >&2
             exit 1
           fi
           echo "Signing $dmg_path with identity $identity"
-          codesign --force --timestamp --sign "$identity" --keychain "$keychain_path" "$dmg_path"
+          codesign --force --timestamp --sign "$identity" "$dmg_path"
           codesign --verify --verbose "$dmg_path"
       - name: Notarize macOS disk image
         if: runner.os == 'macOS'
