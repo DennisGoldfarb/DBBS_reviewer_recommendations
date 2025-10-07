@@ -25,7 +25,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "nsis"
+    ],
     "resources": [
       "resources/*",
       "resources/**/*"
