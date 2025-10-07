@@ -15,9 +15,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Write};
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
@@ -2453,7 +2453,7 @@ async fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<Strin
 #[tauri::command]
 async fn ensure_embedding_helper_ready(app_handle: tauri::AppHandle) -> Result<bool, String> {
     warmup_embedding_helper(app_handle).await?;
-    Ok(EMBEDDING_HELPER_READY.load(Ordering::SeqCst))
+    Ok(EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst))
 }
 
 fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<String, String> {
@@ -2900,7 +2900,7 @@ fn emit_embedding_helper_standby(app_handle: &tauri::AppHandle) {
 }
 
 fn perform_embedding_helper_warmup(app_handle: tauri::AppHandle) -> Result<(), String> {
-    if EMBEDDING_HELPER_READY.load(Ordering::SeqCst) {
+    if EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst) {
         emit_embedding_helper_standby(&app_handle);
         return Ok(());
     }
@@ -2909,7 +2909,7 @@ fn perform_embedding_helper_warmup(app_handle: tauri::AppHandle) -> Result<(), S
         .lock()
         .map_err(|err| format!("Unable to warm up the embedding helper: {err}"))?;
 
-    if EMBEDDING_HELPER_READY.load(Ordering::SeqCst) {
+    if EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst) {
         drop(lock);
         emit_embedding_helper_standby(&app_handle);
         return Ok(());
@@ -2929,14 +2929,14 @@ fn perform_embedding_helper_warmup(app_handle: tauri::AppHandle) -> Result<(), S
     drop(lock);
 
     result.and_then(|_| {
-        EMBEDDING_HELPER_READY.store(true, Ordering::SeqCst);
+        EMBEDDING_HELPER_READY.store(true, AtomicOrdering::SeqCst);
         emit_embedding_helper_standby(&app_handle);
         Ok(())
     })
 }
 
 async fn warmup_embedding_helper(app_handle: tauri::AppHandle) -> Result<(), String> {
-    if EMBEDDING_HELPER_READY.load(Ordering::SeqCst) {
+    if EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst) {
         emit_embedding_helper_standby(&app_handle);
         return Ok(());
     }
@@ -2952,7 +2952,7 @@ fn shutdown_embedding_helper() {
             manager.shutdown();
         }
     }
-    EMBEDDING_HELPER_READY.store(false, Ordering::SeqCst);
+    EMBEDDING_HELPER_READY.store(false, AtomicOrdering::SeqCst);
 }
 
 fn run_embedding_helper(
