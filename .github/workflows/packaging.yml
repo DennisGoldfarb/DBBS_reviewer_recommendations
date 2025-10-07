@@ -415,6 +415,9 @@ jobs:
             exit 1
           fi
 
+          provided="${PROVIDED_IDENTITY:-}"
+          provided_lower="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
+
           identities=()
 
           collect_identities() {
@@ -449,23 +452,16 @@ jobs:
             fi
           done
 
-          if [[ ${#identities[@]} -eq 0 ]]; then
-            echo "No signing identities available in the signing keychain or default search list" >&2
-            exit 1
-          fi
-
-          provided="${PROVIDED_IDENTITY:-}"
-          provided_lower="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
           resolved=""
           resolved_label=""
 
-          for entry in "${identities[@]}"; do
-            fingerprint="${entry%%|*}"
-            label="${entry#*|}"
-            if [[ -z "$fingerprint" ]]; then
-              continue
-            fi
-            if [[ -n "$provided" ]]; then
+          if [[ -n "$provided" ]]; then
+            for entry in "${identities[@]}"; do
+              fingerprint="${entry%%|*}"
+              label="${entry#*|}"
+              if [[ -z "$fingerprint" ]]; then
+                continue
+              fi
               fp_lower="$(printf '%s' "$fingerprint" | tr '[:upper:]' '[:lower:]')"
               if [[ "$fp_lower" == "$provided_lower" ]]; then
                 resolved="$fingerprint"
@@ -478,11 +474,23 @@ jobs:
                 resolved_label="$label"
                 break
               fi
+            done
+
+            if [[ -z "$resolved" ]]; then
+              echo "Provided codesign identity not discovered in signing keychain; falling back to provided value" >&2
+              resolved="$provided"
+            else
+              echo "Matched provided codesign identity to fingerprint $resolved"
             fi
-          done
+          fi
 
           if [[ -z "$resolved" ]]; then
+            if [[ ${#identities[@]} -eq 0 ]]; then
+              echo "No signing identities available in the signing keychain or default search list" >&2
+              exit 1
+            fi
             IFS='|' read -r resolved resolved_label <<<"${identities[0]}"
+            echo "Using first available codesign identity fingerprint $resolved"
           fi
 
           if [[ -z "$resolved" ]]; then
@@ -490,14 +498,13 @@ jobs:
             exit 1
           fi
 
-          if [[ -n "$provided" ]]; then
-            resolved_lower="$(printf '%s' "$resolved" | tr '[:upper:]' '[:lower:]')"
-            if [[ "$resolved_lower" != "$provided_lower" ]]; then
-              echo "Provided codesign identity secret did not match any available identities; using $resolved instead" >&2
+          if [[ -n "$provided" && -n "$resolved_label" ]]; then
+            provided_label_lower="$(printf '%s' "$resolved_label" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$provided_label_lower" != "$provided_lower" && "$resolved" != "$provided" ]]; then
+              echo "Provided codesign identity secret differs from resolved fingerprint; codesign will use $resolved" >&2
             fi
           fi
 
-          echo "Resolved codesign identity fingerprint $resolved"
           if [[ -n "$resolved_label" ]]; then
             echo "Using identity label: $resolved_label"
           fi
@@ -506,6 +513,8 @@ jobs:
             echo "CODESIGN_IDENTITY_RESOLVED=$resolved"
             if [[ -n "$resolved_label" ]]; then
               echo "CODESIGN_IDENTITY_LABEL=$resolved_label"
+            elif [[ -n "$provided" ]]; then
+              echo "CODESIGN_IDENTITY_LABEL=$provided"
             fi
           } >>"$GITHUB_ENV"
 
