@@ -207,7 +207,7 @@ jobs:
             artifact-suffix: windows_x64
           - os: macos-latest
             artifact-suffix: macos_arm64
-          - os: macos-13
+          - os: macos-15-intel
             artifact-suffix: macos_x64
     runs-on: ${{ matrix.os }}
     steps:
