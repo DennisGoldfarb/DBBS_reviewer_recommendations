@@ -17,6 +17,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
 use tauri_plugin_shell::{
@@ -2789,52 +2790,119 @@ fn indexes_from_spreadsheet_labels(
     Ok(indexes)
 }
 
+static EMBEDDING_HELPER: OnceLock<Mutex<EmbeddingHelperManager>> = OnceLock::new();
+
+struct EmbeddingHelperManager {
+    child: Option<CommandChild>,
+    receiver: Option<Receiver<CommandEvent>>,
+    stdout_buffer: Vec<u8>,
+}
+
+impl EmbeddingHelperManager {
+    fn new() -> Self {
+        Self {
+            child: None,
+            receiver: None,
+            stdout_buffer: Vec::new(),
+        }
+    }
+
+    fn ensure_process(&mut self, app_handle: &tauri::AppHandle) -> Result<(), String> {
+        if self.child.is_none() {
+            let (receiver, child) = spawn_embedding_helper(app_handle)?;
+            self.child = Some(child);
+            self.receiver = Some(receiver);
+            self.stdout_buffer.clear();
+        }
+
+        Ok(())
+    }
+
+    fn write_with_newline(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        if let Some(child) = self.child.as_mut() {
+            child.write_all(bytes)?;
+            child.write_all(b"\n")?;
+            child.flush()
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Embedding helper is not running",
+            ))
+        }
+    }
+
+    fn receive_event(&mut self) -> Result<Option<CommandEvent>, String> {
+        let receiver = match self.receiver.as_mut() {
+            Some(receiver) => receiver,
+            None => return Ok(None),
+        };
+
+        Ok(tauri::async_runtime::block_on(receiver.recv()))
+    }
+
+    fn reset(&mut self) {
+        self.child = None;
+        self.receiver = None;
+        self.stdout_buffer.clear();
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.write_all(b"{\"command\":\"shutdown\"}\n");
+            let _ = child.flush();
+        }
+
+        if let Some(receiver) = self.receiver.as_mut() {
+            while let Some(event) = tauri::async_runtime::block_on(receiver.recv()) {
+                if matches!(event, CommandEvent::Terminated(_)) {
+                    break;
+                }
+            }
+        }
+
+        self.reset();
+    }
+}
+
+fn embedding_helper_manager() -> &'static Mutex<EmbeddingHelperManager> {
+    EMBEDDING_HELPER.get_or_init(|| Mutex::new(EmbeddingHelperManager::new()))
+}
+
+fn shutdown_embedding_helper() {
+    if let Some(lock) = EMBEDDING_HELPER.get() {
+        if let Ok(mut manager) = lock.lock() {
+            manager.shutdown();
+        }
+    }
+}
+
 fn run_embedding_helper(
     app_handle: &tauri::AppHandle,
     payload: &EmbeddingRequestPayload,
 ) -> Result<EmbeddingResponsePayload, String> {
     let total_rows = payload.texts.len();
-    let (mut rx, mut child) = spawn_embedding_helper(app_handle)?;
-    let mut child = Some(child);
     let input = serde_json::to_vec(payload)
         .map_err(|err| format!("Unable to serialize the embedding request: {err}"))?;
 
-    let child_ref = match child.as_mut() {
-        Some(child_ref) => child_ref,
-        None => {
-            let message = "Unable to access the embedding helper stdin.".to_string();
-            emit_embedding_error(app_handle, total_rows, &message);
-            return Err(message);
-        }
-    };
+    let manager_lock = embedding_helper_manager();
+    let mut manager = manager_lock
+        .lock()
+        .map_err(|err| format!("Unable to lock the embedding helper: {err}"))?;
 
-    if let Err(err) = child_ref.write(&input) {
+    manager.ensure_process(app_handle)?;
+
+    if let Err(err) = manager.write_with_newline(&input) {
         let message = handle_sidecar_write_error(
             format!("Unable to send data to the embedding helper: {err}"),
-            &mut child,
-            &mut rx,
+            &mut manager,
             app_handle,
             total_rows,
         );
+        emit_embedding_error(app_handle, total_rows, &message);
         return Err(message);
     }
 
-    if let Some(child_ref) = child.as_mut() {
-        if let Err(err) = child_ref.write(b"\n") {
-            let message = handle_sidecar_write_error(
-                format!("Unable to flush embedding helper input: {err}"),
-                &mut child,
-                &mut rx,
-                app_handle,
-                total_rows,
-            );
-            return Err(message);
-        }
-    }
-
-    finalize_sidecar_stdin(&mut child);
-
-    let output = match collect_sidecar_output(&mut rx, app_handle, total_rows) {
+    let output = match collect_sidecar_output(&mut manager, app_handle, total_rows, true) {
         Ok(output) => output,
         Err(err) => {
             emit_embedding_error(app_handle, total_rows, &err);
@@ -2854,7 +2922,11 @@ fn run_embedding_helper(
     if output.stdout.is_empty() {
         let error_message = trimmed_message_or_default(
             &output.stderr,
-            "The embedding helper did not produce any output.",
+            if output.termination.is_some() {
+                "The embedding helper exited before returning a response."
+            } else {
+                "The embedding helper did not produce any output."
+            },
         );
         emit_embedding_error(app_handle, total_rows, &error_message);
         return Err(error_message);
@@ -2881,24 +2953,17 @@ fn run_embedding_helper(
 
 fn handle_sidecar_write_error(
     base_message: String,
-    child: &mut Option<CommandChild>,
-    rx: &mut Receiver<CommandEvent>,
+    manager: &mut EmbeddingHelperManager,
     app_handle: &tauri::AppHandle,
     total_rows: usize,
 ) -> String {
-    finalize_sidecar_stdin(child);
-    match collect_sidecar_output(rx, app_handle, total_rows) {
-        Ok(output) => {
-            let message = summarize_sidecar_failure(&output, base_message);
-            emit_embedding_error(app_handle, total_rows, &message);
-            message
-        }
-        Err(err) => {
-            let message = format!("{base_message}\n\nAdditionally, {err}");
-            emit_embedding_error(app_handle, total_rows, &message);
-            message
-        }
-    }
+    let result = match collect_sidecar_output(manager, app_handle, total_rows, false) {
+        Ok(output) => summarize_sidecar_failure(&output, base_message),
+        Err(err) => format!("{base_message}\n\nAdditionally, {err}"),
+    };
+
+    manager.reset();
+    result
 }
 
 struct SidecarOutput {
@@ -2908,54 +2973,88 @@ struct SidecarOutput {
 }
 
 fn sidecar_exited_successfully(output: &SidecarOutput) -> bool {
-    output
-        .termination
-        .as_ref()
-        .and_then(|payload| payload.code)
-        .map(|code| code == 0)
-        .unwrap_or(false)
+    output.termination.is_none()
 }
 
-fn finalize_sidecar_stdin(child: &mut Option<CommandChild>) {
-    if let Some(child) = child.take() {
-        drop(child);
+fn trim_trailing_newline(buffer: &mut Vec<u8>) {
+    while matches!(buffer.last(), Some(b'\n') | Some(b'\r')) {
+        buffer.pop();
     }
 }
 
 fn collect_sidecar_output(
-    rx: &mut Receiver<CommandEvent>,
+    manager: &mut EmbeddingHelperManager,
     app_handle: &tauri::AppHandle,
     total_rows: usize,
+    expect_response: bool,
 ) -> Result<SidecarOutput, String> {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let mut termination = None;
+
+    if !expect_response && !manager.stdout_buffer.is_empty() {
+        stdout.extend(manager.stdout_buffer.drain(..));
+    }
 
     loop {
-        match tauri::async_runtime::block_on(rx.recv()) {
-            Some(CommandEvent::Stdout(bytes)) => stdout.extend_from_slice(&bytes),
+        if expect_response {
+            if let Some(position) = manager.stdout_buffer.iter().position(|&byte| byte == b'\n') {
+                stdout.extend(manager.stdout_buffer.drain(..=position));
+                trim_trailing_newline(&mut stdout);
+                return Ok(SidecarOutput {
+                    stdout,
+                    stderr,
+                    termination: None,
+                });
+            }
+        }
+
+        match manager.receive_event()? {
+            Some(CommandEvent::Stdout(bytes)) => {
+                if expect_response {
+                    manager.stdout_buffer.extend_from_slice(&bytes);
+                } else {
+                    stdout.extend_from_slice(&bytes);
+                }
+            }
             Some(CommandEvent::Stderr(bytes)) => {
                 if !emit_progress_from_line(app_handle, total_rows, &bytes) {
                     stderr.extend_from_slice(&bytes);
                 }
             }
             Some(CommandEvent::Terminated(payload)) => {
-                termination = Some(payload);
-                break;
+                if expect_response {
+                    stdout.extend(manager.stdout_buffer.drain(..));
+                    trim_trailing_newline(&mut stdout);
+                }
+                manager.reset();
+                return Ok(SidecarOutput {
+                    stdout,
+                    stderr,
+                    termination: Some(payload),
+                });
             }
             Some(CommandEvent::Error(err)) => {
+                manager.reset();
                 return Err(format!("Unable to read embedding helper output: {err}"));
             }
             Some(_) => {}
-            None => break,
+            None => {
+                manager.reset();
+                if expect_response {
+                    return Err(
+                        "The embedding helper output stream closed unexpectedly.".to_string()
+                    );
+                } else {
+                    trim_trailing_newline(&mut stdout);
+                    return Ok(SidecarOutput {
+                        stdout,
+                        stderr,
+                        termination: None,
+                    });
+                }
+            }
         }
     }
-
-    Ok(SidecarOutput {
-        stdout,
-        stderr,
-        termination,
-    })
 }
 
 fn summarize_sidecar_failure(output: &SidecarOutput, base_message: String) -> String {
@@ -4496,4 +4595,6 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    shutdown_embedding_helper();
 }

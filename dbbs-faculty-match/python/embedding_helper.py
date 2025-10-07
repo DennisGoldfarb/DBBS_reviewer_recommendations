@@ -4,6 +4,7 @@ import re
 import sys
 import time
 from collections.abc import Mapping, Sequence
+from typing import Dict, Tuple
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
@@ -23,6 +24,12 @@ except ImportError as exc:
     sys.exit(1)
 
 hf_logging.set_verbosity_error()
+
+TokenizerCache = Dict[str, AutoTokenizer]
+ModelCache = Dict[str, AutoModel]
+
+_TOKENIZERS: TokenizerCache = {}
+_MODELS: ModelCache = {}
 
 
 def sanitize_utf8_text(text: str) -> str:
@@ -109,13 +116,21 @@ def emit_progress(payload: dict) -> None:
     sys.stderr.flush()
 
 
-def main() -> None:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"Unable to parse embedding request: {exc}\n")
-        sys.exit(1)
+def load_model(model_name: str) -> Tuple[AutoTokenizer, AutoModel]:
+    tokenizer = _TOKENIZERS.get(model_name)
+    model = _MODELS.get(model_name)
 
+    if tokenizer is None or model is None:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name)
+        model.eval()
+        _TOKENIZERS[model_name] = tokenizer
+        _MODELS[model_name] = model
+
+    return tokenizer, model
+
+
+def process_embedding_request(payload: dict) -> dict:
     model_name = payload.get("model") or "NeuML/pubmedbert-base-embeddings"
     texts = payload.get("texts") or []
     total = len(texts)
@@ -144,8 +159,7 @@ def main() -> None:
     label_for_total = singular_label if total == 1 else plural_label
 
     if not texts:
-        json.dump({"model": model_name, "dimension": 0, "rows": []}, sys.stdout)
-        return
+        return {"model": model_name, "dimension": 0, "rows": []}
 
     emit_progress(
         {
@@ -156,9 +170,7 @@ def main() -> None:
         }
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-    model.eval()
+    tokenizer, model = load_model(model_name)
 
     emit_progress(
         {
@@ -307,7 +319,50 @@ def main() -> None:
         }
     )
 
-    json.dump(result, sys.stdout)
+    return result
+
+
+def handle_command(payload: dict) -> dict:
+    command = payload.get("command")
+
+    if command == "shutdown":
+        return {"status": "shutdown"}
+
+    if command not in (None, "embed"):
+        return {"error": f"Unknown command: {command}"}
+
+    return process_embedding_request(payload)
+
+
+def main() -> None:
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        try:
+            payload = json.loads(line)
+        except Exception as exc:  # noqa: BLE001
+            message = f"Unable to parse embedding request: {exc}"
+            sys.stderr.write(message + "\n")
+            sys.stderr.flush()
+            sys.stdout.write(json.dumps({"error": message}) + "\n")
+            sys.stdout.flush()
+            continue
+
+        try:
+            response = handle_command(payload)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            sys.stderr.write(f"Embedding helper error: {message}\n")
+            sys.stderr.flush()
+            response = {"error": message}
+
+        sys.stdout.write(json.dumps(response) + "\n")
+        sys.stdout.flush()
+
+        if response.get("status") == "shutdown":
+            break
 
 
 if __name__ == "__main__":
