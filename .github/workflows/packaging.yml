@@ -391,8 +391,14 @@ jobs:
             exit 1
           fi
 
-          mapfile -t identities < <(security find-identity -v -p codesigning "$keychain_path" | \
-            sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/' || true)
+          identities=()
+          while IFS= read -r line; do
+            entry=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/')
+            if [[ "$entry" == *"|"* ]]; then
+              identities+=("$entry")
+            fi
+          done < <(security find-identity -v -p codesigning "$keychain_path" || true)
+
           if [[ ${#identities[@]} -eq 0 ]]; then
             echo "No signing identities available in $keychain_path" >&2
             exit 1
