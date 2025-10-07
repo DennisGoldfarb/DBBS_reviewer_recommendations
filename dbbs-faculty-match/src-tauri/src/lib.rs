@@ -15,8 +15,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Write};
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 use tauri::{Emitter, Manager};
@@ -37,6 +38,7 @@ const DEFAULT_FACULTY_EMBEDDINGS: &[u8] =
     include_bytes!("../assets/default_faculty_embeddings.json");
 const DEFAULT_EMBEDDING_MODEL: &str = "NeuML/pubmedbert-base-embeddings";
 const FACULTY_EMBEDDING_PROGRESS_EVENT: &str = "faculty-embedding-progress";
+const FACULTY_EMBEDDING_STANDBY_MESSAGE: &str = "Embedding helper ready.";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -2448,6 +2450,12 @@ async fn update_faculty_embeddings(app_handle: tauri::AppHandle) -> Result<Strin
     Ok(result?)
 }
 
+#[tauri::command]
+async fn ensure_embedding_helper_ready(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    warmup_embedding_helper(app_handle).await?;
+    Ok(EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst))
+}
+
 fn perform_faculty_embedding_refresh(app_handle: tauri::AppHandle) -> Result<String, String> {
     let started_at = Instant::now();
     emit_faculty_embedding_progress(
@@ -2791,6 +2799,8 @@ fn indexes_from_spreadsheet_labels(
 }
 
 static EMBEDDING_HELPER: OnceLock<Mutex<EmbeddingHelperManager>> = OnceLock::new();
+static EMBEDDING_HELPER_READY: AtomicBool = AtomicBool::new(false);
+static EMBEDDING_HELPER_WARMUP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 struct EmbeddingHelperManager {
     child: Option<CommandChild>,
@@ -2871,12 +2881,78 @@ fn embedding_helper_manager() -> &'static Mutex<EmbeddingHelperManager> {
     EMBEDDING_HELPER.get_or_init(|| Mutex::new(EmbeddingHelperManager::new()))
 }
 
+fn embedding_helper_warmup_lock() -> &'static Mutex<()> {
+    EMBEDDING_HELPER_WARMUP_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn emit_embedding_helper_standby(app_handle: &tauri::AppHandle) {
+    emit_faculty_embedding_progress(
+        app_handle,
+        EmbeddingProgressUpdate {
+            phase: "standby".into(),
+            message: Some(FACULTY_EMBEDDING_STANDBY_MESSAGE.into()),
+            processed_rows: 0,
+            total_rows: 0,
+            elapsed_seconds: None,
+            estimated_remaining_seconds: None,
+        },
+    );
+}
+
+fn perform_embedding_helper_warmup(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst) {
+        emit_embedding_helper_standby(&app_handle);
+        return Ok(());
+    }
+
+    let lock = embedding_helper_warmup_lock()
+        .lock()
+        .map_err(|err| format!("Unable to warm up the embedding helper: {err}"))?;
+
+    if EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst) {
+        drop(lock);
+        emit_embedding_helper_standby(&app_handle);
+        return Ok(());
+    }
+
+    let payload = EmbeddingRequestPayload {
+        model: DEFAULT_EMBEDDING_MODEL.to_string(),
+        texts: vec![EmbeddingRequestRow {
+            id: 0,
+            text: "Embedding helper warm-up text".into(),
+        }],
+        item_label: Some("warm-up text".into()),
+        item_label_plural: Some("warm-up texts".into()),
+    };
+
+    let result = run_embedding_helper(&app_handle, &payload);
+    drop(lock);
+
+    result.and_then(|_| {
+        EMBEDDING_HELPER_READY.store(true, AtomicOrdering::SeqCst);
+        emit_embedding_helper_standby(&app_handle);
+        Ok(())
+    })
+}
+
+async fn warmup_embedding_helper(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if EMBEDDING_HELPER_READY.load(AtomicOrdering::SeqCst) {
+        emit_embedding_helper_standby(&app_handle);
+        return Ok(());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || perform_embedding_helper_warmup(app_handle))
+        .await
+        .map_err(|err| format!("Unable to warm up the embedding helper: {err}"))?
+}
+
 fn shutdown_embedding_helper() {
     if let Some(lock) = EMBEDDING_HELPER.get() {
         if let Ok(mut manager) = lock.lock() {
             manager.shutdown();
         }
     }
+    EMBEDDING_HELPER_READY.store(false, AtomicOrdering::SeqCst);
 }
 
 fn run_embedding_helper(
@@ -4585,9 +4661,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = warmup_embedding_helper(handle).await {
+                    eprintln!("Failed to warm up embedding helper: {err}");
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             submit_matching_request,
             update_faculty_embeddings,
+            ensure_embedding_helper_ready,
             analyze_spreadsheet,
             get_faculty_dataset_status,
             preview_faculty_roster,
