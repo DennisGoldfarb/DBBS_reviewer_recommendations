@@ -416,27 +416,56 @@ jobs:
           fi
 
           provided="${PROVIDED_IDENTITY:-}"
-          provided_lower="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
+          provided_lower=""
+          if [[ -n "$provided" ]]; then
+            provided_lower="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
+          fi
 
-          identities=()
+          resolved=""
+          resolved_label=""
+          first_fingerprint=""
+          first_label=""
+          found_any=0
+          matched=0
+          match_fingerprint=""
+          match_label=""
 
-          collect_identities() {
-            local target="$1"
-            local output
-            if [[ -n "$target" ]]; then
-              echo "Attempting to resolve signing identities in $target"
-              output=$(security find-identity -v -p codesigning "$target" 2>&1 || true)
-            else
-              echo "Attempting to resolve signing identities from the default keychain search list"
-              output=$(security find-identity -v -p codesigning 2>&1 || true)
-            fi
-            printf '%s\n' "$output"
+          resolve_from_output() {
+            local output="$1"
             while IFS= read -r line; do
               entry=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/')
-              if [[ "$entry" == *"|"* ]]; then
-                identities+=("$entry")
+              if [[ "$entry" != *"|"* ]]; then
+                continue
+              fi
+              found_any=1
+              fingerprint="${entry%%|*}"
+              label="${entry#*|}"
+              if [[ -z "$first_fingerprint" ]]; then
+                first_fingerprint="$fingerprint"
+                first_label="$label"
+              fi
+              if [[ -n "$provided_lower" ]]; then
+                fp_lower="$(printf '%s' "$fingerprint" | tr '[:upper:]' '[:lower:]')"
+                if [[ "$fp_lower" == "$provided_lower" ]]; then
+                  resolved="$fingerprint"
+                  resolved_label="$label"
+                  matched=1
+                  match_fingerprint="$fingerprint"
+                  match_label="$label"
+                  return 0
+                fi
+                label_lower="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+                if [[ "$label_lower" == "$provided_lower" ]]; then
+                  resolved="$fingerprint"
+                  resolved_label="$label"
+                  matched=1
+                  match_fingerprint="$fingerprint"
+                  match_label="$label"
+                  return 0
+                fi
               fi
             done <<<"$output"
+            return 1
           }
 
           declare -a search_targets=("$keychain_path")
@@ -446,50 +475,36 @@ jobs:
           search_targets+=("")
 
           for target in "${search_targets[@]}"; do
-            collect_identities "$target"
-            if [[ ${#identities[@]} -gt 0 ]]; then
+            if [[ -n "$target" ]]; then
+              echo "Attempting to resolve signing identities in $target"
+              output=$(security find-identity -v -p codesigning "$target" 2>&1 || true)
+            else
+              echo "Attempting to resolve signing identities from the default keychain search list"
+              output=$(security find-identity -v -p codesigning 2>&1 || true)
+            fi
+            printf '%s\n' "$output"
+            resolve_from_output "$output"
+            if [[ -n "$resolved" ]]; then
               break
             fi
           done
 
-          resolved=""
-          resolved_label=""
-
-          if [[ -n "$provided" ]]; then
-            for entry in "${identities[@]}"; do
-              fingerprint="${entry%%|*}"
-              label="${entry#*|}"
-              if [[ -z "$fingerprint" ]]; then
-                continue
-              fi
-              fp_lower="$(printf '%s' "$fingerprint" | tr '[:upper:]' '[:lower:]')"
-              if [[ "$fp_lower" == "$provided_lower" ]]; then
-                resolved="$fingerprint"
-                resolved_label="$label"
-                break
-              fi
-              label_lower="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
-              if [[ "$label_lower" == "$provided_lower" ]]; then
-                resolved="$fingerprint"
-                resolved_label="$label"
-                break
-              fi
-            done
-
-            if [[ -z "$resolved" ]]; then
+          if [[ -n "$provided" && -z "$resolved" ]]; then
+            if [[ $found_any -eq 0 ]]; then
               echo "Provided codesign identity not discovered in signing keychain; falling back to provided value" >&2
-              resolved="$provided"
             else
-              echo "Matched provided codesign identity to fingerprint $resolved"
+              echo "Provided codesign identity not matched to imported certificates; falling back to provided value" >&2
             fi
+            resolved="$provided"
           fi
 
           if [[ -z "$resolved" ]]; then
-            if [[ ${#identities[@]} -eq 0 ]]; then
+            if [[ $found_any -eq 0 ]]; then
               echo "No signing identities available in the signing keychain or default search list" >&2
               exit 1
             fi
-            IFS='|' read -r resolved resolved_label <<<"${identities[0]}"
+            resolved="$first_fingerprint"
+            resolved_label="$first_label"
             echo "Using first available codesign identity fingerprint $resolved"
           fi
 
@@ -498,21 +513,26 @@ jobs:
             exit 1
           fi
 
-          if [[ -n "$provided" && -n "$resolved_label" ]]; then
-            provided_label_lower="$(printf '%s' "$resolved_label" | tr '[:upper:]' '[:lower:]')"
-            if [[ "$provided_label_lower" != "$provided_lower" && "$resolved" != "$provided" ]]; then
-              echo "Provided codesign identity secret differs from resolved fingerprint; codesign will use $resolved" >&2
-            fi
+          if [[ $matched -eq 1 ]]; then
+            echo "Matched provided codesign identity to fingerprint $match_fingerprint"
+          elif [[ -n "$provided" && "$resolved" != "$provided" ]]; then
+            echo "Provided codesign identity secret differs from resolved fingerprint; codesign will use $resolved" >&2
           fi
 
           if [[ -n "$resolved_label" ]]; then
             echo "Using identity label: $resolved_label"
+          elif [[ -n "$match_label" ]]; then
+            echo "Using identity label: $match_label"
+          elif [[ -n "$provided" ]]; then
+            echo "Using identity label: $provided"
           fi
 
           {
             echo "CODESIGN_IDENTITY_RESOLVED=$resolved"
             if [[ -n "$resolved_label" ]]; then
               echo "CODESIGN_IDENTITY_LABEL=$resolved_label"
+            elif [[ -n "$match_label" ]]; then
+              echo "CODESIGN_IDENTITY_LABEL=$match_label"
             elif [[ -n "$provided" ]]; then
               echo "CODESIGN_IDENTITY_LABEL=$provided"
             fi
