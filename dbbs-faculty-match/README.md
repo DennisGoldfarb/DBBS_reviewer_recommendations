@@ -54,3 +54,50 @@ which settings will be submitted to the backend service. File pickers fall back
 silently if the operating system denies access; you can always paste a path into
 the accompanying text field.
 
+## macOS signing and notarization
+
+Apple's notarization service requires both the primary Tauri executable and the
+`embedding-helper` sidecar to be signed with the hardened runtime and a secure
+timestamp before you submit a DMG. The `scripts/create-dmg.mjs` helper now signs
+every binary inside `DBBS Faculty Match.app/Contents/MacOS` automatically when
+an identity is provided via environment variables, ensuring the notarization log
+no longer reports missing hardened runtime or timestamp metadata.
+
+1. Build the release bundle on macOS:
+
+   ```bash
+   npm run tauri -- build
+   ```
+
+2. Export your Developer ID Application identity and (optionally) an
+   entitlements file path so the DMG helper can codesign on your behalf:
+
+   ```bash
+   export APPLE_CODESIGN_IDENTITY="Developer ID Application: Jane Doe (TEAMID1234)"
+   export APPLE_CODESIGN_ENTITLEMENTS="/absolute/path/to/entitlements.plist" # optional
+   ```
+
+3. Create the DMG, which will sign the app bundle, the `dbbs-faculty-match`
+   binary, and the `embedding-helper` sidecar with `--options runtime` and
+   `--timestamp` before packaging:
+
+   ```bash
+   node ./scripts/create-dmg.mjs
+   ```
+
+4. Submit the resulting DMG for notarization using the keychain profile created
+   with `xcrun notarytool store-credentials`, and staple the ticket after
+   approval:
+
+   ```bash
+   xcrun notarytool submit src-tauri/target/release/bundle/dmg/DBBS\ Faculty\ Match_0.1.0_macos_arm64.dmg \
+     --keychain-profile "notary-profile" \
+     --wait
+   xcrun stapler staple src-tauri/target/release/bundle/dmg/DBBS\ Faculty\ Match_0.1.0_macos_arm64.dmg
+   ```
+
+If you prefer to run `codesign` manually, sign each executable in
+`Contents/MacOS` with `--options runtime --timestamp` before signing the app
+bundle itself. Verifying with `codesign --verify --deep --strict --verbose=2` on
+the `.app` bundle should complete without errors before submitting to Apple.
+
