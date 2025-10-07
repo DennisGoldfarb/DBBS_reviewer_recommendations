@@ -323,47 +323,58 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
 
-      - name: Import Apple codesigning certificates
-        id: import-certs
-        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
-        uses: apple-actions/import-codesign-certs@v5
-        with:
-          p12-file-base64:   ${{ secrets.MACOS_CERT_P12 }}
-          p12-password:      ${{ secrets.MACOS_CERT_PASSWORD }}
-          keychain-password: ${{ secrets.MACOS_CERT_PASSWORD }}
-          keychain:          signing_temp
-
-      - name: Export signing keychain path
+      - name: Install the Apple certificate and provisioning profile
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
         env:
-          KEYCHAIN_PATH_OUTPUT: ${{ steps.import-certs.outputs.keychain-path }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          INSTALLER_CERT_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
-          keychain_path="${KEYCHAIN_PATH_OUTPUT:-}"
-          if [[ -z "$keychain_path" ]]; then
-            keychain_path="$HOME/Library/Keychains/signing_temp.keychain-db"
-            echo "import-certs output did not include keychain path; assuming $keychain_path" >&2
-          fi
-          if [[ ! -f "$keychain_path" ]]; then
-            echo "Expected signing keychain at $keychain_path not found" >&2
-            ls -al "$HOME/Library/Keychains" >&2 || true
+
+          if [[ -z "${BUILD_CERTIFICATE_BASE64:-}" ]]; then
+            echo "MACOS_CERT_P12 secret must be provided" >&2
             exit 1
           fi
 
-          if [[ -z "${MACOS_CERT_PASSWORD:-}" ]]; then
-            echo "MACOS_CERT_PASSWORD secret must be provided to unlock signing keychain" >&2
-            exit 1
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          INSTALLER_CERT_PATH="$RUNNER_TEMP/installer_certificate.p12"
+          PP_PATH="$RUNNER_TEMP/build_pp.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          if [[ -n "${INSTALLER_CERT_BASE64:-}" ]]; then
+            printf '%s' "$INSTALLER_CERT_BASE64" | base64 --decode -o "$INSTALLER_CERT_PATH"
           fi
 
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$MACOS_CERT_PASSWORD" "$keychain_path"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$MACOS_CERT_PASSWORD" "$keychain_path" >/dev/null
-          security list-keychains -d user -s "$keychain_path" login.keychain
+          if [[ -n "${BUILD_PROVISION_PROFILE_BASE64:-}" ]]; then
+            printf '%s' "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+          fi
 
-          echo "Using signing keychain at $keychain_path"
-          echo "KEYCHAIN_PATH=$keychain_path" >>"$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          if [[ -s "$INSTALLER_CERT_PATH" ]]; then
+            security import "$INSTALLER_CERT_PATH" -P "${INSTALLER_CERT_PASSWORD:-$P12_PASSWORD}" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          fi
+
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          if [[ -s "$PP_PATH" ]]; then
+            mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+            cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles"
+          fi
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >>"$GITHUB_ENV"
 
       - name: Show imported signing identities
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
@@ -372,171 +383,10 @@ jobs:
           set -euo pipefail
           keychain_path="${KEYCHAIN_PATH:-}"
           if [[ -z "$keychain_path" ]]; then
-            echo "Keychain path environment variable not available" >&2
+            echo "KEYCHAIN_PATH environment variable not available" >&2
             exit 1
           fi
-          security list-keychains -d user -s "$keychain_path" login.keychain
-          declare -a search_targets=("$keychain_path")
-          if [[ "$keychain_path" == *.keychain-db ]]; then
-            search_targets+=("${keychain_path%.keychain-db}.keychain")
-          fi
-          search_targets+=("")
-
-          identities_found=0
-          for target in "${search_targets[@]}"; do
-            if [[ -n "$target" ]]; then
-              echo "Querying signing identities in $target"
-              output=$(security find-identity -v -p codesigning "$target" 2>&1 || true)
-            else
-              echo "Querying signing identities from the default keychain search list"
-              output=$(security find-identity -v -p codesigning 2>&1 || true)
-            fi
-            printf '%s\n' "$output"
-            if grep -Eq '^[[:space:]]*[0-9]+\)' <<<"$output"; then
-              identities_found=1
-              break
-            fi
-          done
-
-          if [[ $identities_found -eq 0 ]]; then
-            echo "No signing identities reported by security find-identity" >&2
-          fi
-
-      - name: Resolve codesign identity
-        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
-        env:
-          PROVIDED_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          keychain_path="${KEYCHAIN_PATH:-}"
-          if [[ -z "$keychain_path" ]]; then
-            echo "KEYCHAIN_PATH environment variable is not set" >&2
-            exit 1
-          fi
-
-          provided="${PROVIDED_IDENTITY:-}"
-          provided_lower=""
-          if [[ -n "$provided" ]]; then
-            provided_lower="$(printf '%s' "$provided" | tr '[:upper:]' '[:lower:]')"
-          fi
-
-          resolved=""
-          resolved_label=""
-          first_fingerprint=""
-          first_label=""
-          found_any=0
-          matched=0
-          match_fingerprint=""
-          match_label=""
-
-          resolve_from_output() {
-            local output="$1"
-            while IFS= read -r line; do
-              entry=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-Fa-f]+) "(.*)"$/\1|\2/')
-              if [[ "$entry" != *"|"* ]]; then
-                continue
-              fi
-              found_any=1
-              fingerprint="${entry%%|*}"
-              label="${entry#*|}"
-              if [[ -z "$first_fingerprint" ]]; then
-                first_fingerprint="$fingerprint"
-                first_label="$label"
-              fi
-              if [[ -n "$provided_lower" ]]; then
-                fp_lower="$(printf '%s' "$fingerprint" | tr '[:upper:]' '[:lower:]')"
-                if [[ "$fp_lower" == "$provided_lower" ]]; then
-                  resolved="$fingerprint"
-                  resolved_label="$label"
-                  matched=1
-                  match_fingerprint="$fingerprint"
-                  match_label="$label"
-                  return 0
-                fi
-                label_lower="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
-                if [[ "$label_lower" == "$provided_lower" ]]; then
-                  resolved="$fingerprint"
-                  resolved_label="$label"
-                  matched=1
-                  match_fingerprint="$fingerprint"
-                  match_label="$label"
-                  return 0
-                fi
-              fi
-            done <<<"$output"
-            return 1
-          }
-
-          declare -a search_targets=("$keychain_path")
-          if [[ "$keychain_path" == *.keychain-db ]]; then
-            search_targets+=("${keychain_path%.keychain-db}.keychain")
-          fi
-          search_targets+=("")
-
-          for target in "${search_targets[@]}"; do
-            if [[ -n "$target" ]]; then
-              echo "Attempting to resolve signing identities in $target"
-              output=$(security find-identity -v -p codesigning "$target" 2>&1 || true)
-            else
-              echo "Attempting to resolve signing identities from the default keychain search list"
-              output=$(security find-identity -v -p codesigning 2>&1 || true)
-            fi
-            printf '%s\n' "$output"
-            resolve_from_output "$output"
-            if [[ -n "$resolved" ]]; then
-              break
-            fi
-          done
-
-          if [[ -n "$provided" && -z "$resolved" ]]; then
-            if [[ $found_any -eq 0 ]]; then
-              echo "Provided codesign identity not discovered in signing keychain; falling back to provided value" >&2
-            else
-              echo "Provided codesign identity not matched to imported certificates; falling back to provided value" >&2
-            fi
-            resolved="$provided"
-          fi
-
-          if [[ -z "$resolved" ]]; then
-            if [[ $found_any -eq 0 ]]; then
-              echo "No signing identities available in the signing keychain or default search list" >&2
-              exit 1
-            fi
-            resolved="$first_fingerprint"
-            resolved_label="$first_label"
-            echo "Using first available codesign identity fingerprint $resolved"
-          fi
-
-          if [[ -z "$resolved" ]]; then
-            echo "Failed to resolve a codesign identity" >&2
-            exit 1
-          fi
-
-          if [[ $matched -eq 1 ]]; then
-            echo "Matched provided codesign identity to fingerprint $match_fingerprint"
-          elif [[ -n "$provided" && "$resolved" != "$provided" ]]; then
-            echo "Provided codesign identity secret differs from resolved fingerprint; codesign will use $resolved" >&2
-          fi
-
-          if [[ -n "$resolved_label" ]]; then
-            echo "Using identity label: $resolved_label"
-          elif [[ -n "$match_label" ]]; then
-            echo "Using identity label: $match_label"
-          elif [[ -n "$provided" ]]; then
-            echo "Using identity label: $provided"
-          fi
-
-          {
-            echo "CODESIGN_IDENTITY_RESOLVED=$resolved"
-            if [[ -n "$resolved_label" ]]; then
-              echo "CODESIGN_IDENTITY_LABEL=$resolved_label"
-            elif [[ -n "$match_label" ]]; then
-              echo "CODESIGN_IDENTITY_LABEL=$match_label"
-            elif [[ -n "$provided" ]]; then
-              echo "CODESIGN_IDENTITY_LABEL=$provided"
-            fi
-          } >>"$GITHUB_ENV"
+          security find-identity -v -p codesigning "$keychain_path" || true
 
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
@@ -590,6 +440,8 @@ jobs:
 
       - name: Codesign macOS disk image
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -603,15 +455,12 @@ jobs:
             echo "KEYCHAIN_PATH environment variable is not set" >&2
             exit 1
           fi
-          identity="${CODESIGN_IDENTITY_RESOLVED:-}"
+          identity="${CODESIGN_IDENTITY:-}"
           if [[ -z "$identity" ]]; then
-            echo "CODESIGN_IDENTITY_RESOLVED environment variable is not set" >&2
+            echo "CODESIGN_IDENTITY secret must be provided" >&2
             exit 1
           fi
           echo "Signing $dmg_path with identity $identity"
-          if [[ -n "${CODESIGN_IDENTITY_LABEL:-}" ]]; then
-            echo "Identity label: ${CODESIGN_IDENTITY_LABEL}"
-          fi
           codesign --force --timestamp --sign "$identity" --keychain "$keychain_path" "$dmg_path"
           codesign --verify --verbose "$dmg_path"
 
