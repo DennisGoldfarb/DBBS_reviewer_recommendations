@@ -292,6 +292,7 @@ function App() {
   const [embeddingStatus, setEmbeddingStatus] = useState<StatusMessage | null>(null);
   const [embeddingProgress, setEmbeddingProgress] =
     useState<EmbeddingProgressPayload | null>(null);
+  const [isEmbeddingHelperReady, setIsEmbeddingHelperReady] = useState(false);
   const [datasetStatus, setDatasetStatus] =
     useState<FacultyDatasetStatus | null>(null);
   const [isDatasetLoading, setIsDatasetLoading] = useState(true);
@@ -322,7 +323,8 @@ function App() {
     string | null
   >(null);
   const [theme, setTheme] = useState<ThemePreference>(getStoredThemePreference);
-  const areControlsDisabled = isSubmitting || isUpdatingEmbeddings;
+  const areControlsDisabled =
+    isSubmitting || isUpdatingEmbeddings || !isEmbeddingHelperReady;
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -403,10 +405,56 @@ function App() {
 
   useEffect(() => {
     let isMounted = true;
+
+    const warmup = async () => {
+      try {
+        const ready = await invoke<boolean>("ensure_embedding_helper_ready");
+        if (isMounted) {
+          setIsEmbeddingHelperReady(ready);
+        }
+      } catch (warmupError) {
+        if (!isMounted) {
+          return;
+        }
+        const message =
+          warmupError instanceof Error
+            ? warmupError.message
+            : String(warmupError);
+        setIsEmbeddingHelperReady(false);
+        setEmbeddingStatus({
+          variant: "error",
+          message: `Unable to initialize the embedding helper: ${message}`,
+        });
+      }
+    };
+
+    warmup();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
     let unlisten: UnlistenFn | null = null;
 
     listen<EmbeddingProgressPayload>("faculty-embedding-progress", (event) => {
       setEmbeddingProgress(event.payload);
+      if (event.payload.phase === "standby") {
+        setIsEmbeddingHelperReady(true);
+        setEmbeddingStatus((current) => {
+          if (
+            current?.variant === "error" &&
+            current.message.startsWith("Unable to initialize the embedding helper")
+          ) {
+            return null;
+          }
+          return current;
+        });
+      } else if (event.payload.phase === "error") {
+        setIsEmbeddingHelperReady(false);
+      }
     })
       .then((fn) => {
         if (!isMounted) {
@@ -2403,6 +2451,12 @@ function App() {
               </section>
             )}
           </section>
+        )}
+
+        {!isEmbeddingHelperReady && !embeddingProgress && (
+          <div className="status-banner status-info">
+            Preparing the embedding helper…
+          </div>
         )}
 
         {embeddingProgress && (
