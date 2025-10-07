@@ -395,27 +395,46 @@ jobs:
             exit 1
           fi
 
-          embedding_helper_path="$app_bundle/Contents/MacOS/embedding-helper"
           embedding_helper_entitlements="dbbs-faculty-match/src-tauri/macos/embedding-helper.entitlements"
+          if [[ ! -f "$embedding_helper_entitlements" ]]; then
+            echo "Entitlements file not found at $embedding_helper_entitlements" >&2
+            exit 1
+          fi
 
-          if [[ -f "$embedding_helper_path" ]]; then
-            if [[ ! -f "$embedding_helper_entitlements" ]]; then
-              echo "Entitlements file not found at $embedding_helper_entitlements" >&2
-              exit 1
+          echo "Locating embedding helper binaries inside $app_bundle"
+          embedding_helpers=()
+          while IFS= read -r -d '' candidate; do
+            if file "$candidate" | grep -q 'Mach-O'; then
+              embedding_helpers+=("$candidate")
             fi
+          done < <(find "$app_bundle/Contents" -type f -perm -111 -name 'embedding-helper*' -print0)
 
-            echo "Applying entitlements to $(basename "$embedding_helper_path")"
+          if [[ ${#embedding_helpers[@]} -eq 0 ]]; then
+            echo "Embedding helper binary not found inside $app_bundle" >&2
+            exit 1
+          fi
+
+          for embedding_helper_path in "${embedding_helpers[@]}"; do
+            echo "Applying entitlements to $(basename "$embedding_helper_path") at $embedding_helper_path"
             codesign --force --options runtime --timestamp \
               --entitlements "$embedding_helper_entitlements" \
               --sign "$identity" \
               "$embedding_helper_path"
-          else
-            echo "Embedding helper binary not found at $embedding_helper_path" >&2
-          fi
+          done
+
+          is_embedding_helper() {
+            local path="$1"
+            for helper in "${embedding_helpers[@]}"; do
+              if [[ "$path" == "$helper" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
 
           echo "Signing individual binaries inside $app_bundle"
           while IFS= read -r -d '' executable; do
-            if [[ "$executable" == "$embedding_helper_path" ]]; then
+            if is_embedding_helper "$executable"; then
               continue
             fi
             echo "  Signing $(basename "$executable")"
