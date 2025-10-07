@@ -316,13 +316,6 @@ jobs:
           $exePath = if ($command -is [System.Management.Automation.CommandInfo]) { $command.Source } else { $command.FullName }
           & $exePath /VERSION
 
-      - name: Build Tauri application
-        working-directory: dbbs-faculty-match
-        run: npm exec -- tauri build --ci
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
-
       - name: Install the Apple certificate and provisioning profile
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
         env:
@@ -387,6 +380,13 @@ jobs:
             exit 1
           fi
           security find-identity -v -p codesigning "$keychain_path" || true
+
+      - name: Build Tauri application
+        working-directory: dbbs-faculty-match
+        run: npm exec -- tauri build --ci
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
 
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
