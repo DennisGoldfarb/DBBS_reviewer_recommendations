@@ -373,6 +373,40 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
 
+      - name: Codesign macOS app bundle
+        if: runner.os == 'macOS'
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          identity="${CODESIGN_IDENTITY:-}"
+          if [[ -z "$identity" ]]; then
+            echo "CODESIGN_IDENTITY secret must be provided" >&2
+            exit 1
+          fi
+
+          bundle_root="dbbs-faculty-match/src-tauri/target/release/bundle/macos"
+          app_bundle=$(find "$bundle_root" -maxdepth 1 -type d -name '*.app' | head -n 1)
+          if [[ -z "$app_bundle" ]]; then
+            echo "No .app bundle found in $bundle_root" >&2
+            find "$bundle_root" -maxdepth 2 -print >&2 || true
+            exit 1
+          fi
+
+          echo "Signing individual binaries inside $app_bundle"
+          while IFS= read -r -d '' executable; do
+            echo "  Signing $(basename "$executable")"
+            codesign --force --options runtime --timestamp --sign "$identity" "$executable"
+          done < <(find "$app_bundle/Contents" \
+              \( -path '*/MacOS/*' -o -path '*/Frameworks/*' -o -path '*/Helpers/*' -o -path '*/Library/*' \) \
+              -type f -perm -111 -print0)
+
+          echo "Signing app bundle $app_bundle"
+          codesign --force --options runtime --timestamp --sign "$identity" "$app_bundle"
+          codesign --verify --verbose "$app_bundle"
+
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -407,21 +441,37 @@ jobs:
           Rename-Item -Path $installer.FullName -NewName $newName -Force
 
 
-      - name: Rename macOS disk image
+      - name: Create macOS disk image
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir="dbbs-faculty-match/src-tauri/target/release/bundle/dmg"
-          dmg=$(find "$bundle_dir" -maxdepth 1 -type f -name '*.dmg' | head -n 1)
-          if [[ -z "$dmg" ]]; then
-            echo "No DMG artifact found" >&2
+          slug="${{ steps.metadata.outputs.slug }}"
+          version="${{ steps.metadata.outputs.version }}"
+          suffix="${{ matrix.artifact-suffix }}"
+
+          bundle_root="dbbs-faculty-match/src-tauri/target/release/bundle"
+          app_bundle=$(find "$bundle_root/macos" -maxdepth 1 -type d -name '*.app' | head -n 1)
+          if [[ -z "$app_bundle" ]]; then
+            echo "No .app bundle found in $bundle_root/macos" >&2
+            find "$bundle_root/macos" -maxdepth 2 -print >&2 || true
             exit 1
           fi
-          new_name="${{ steps.metadata.outputs.slug }}_${{ steps.metadata.outputs.version }}_${{ matrix.artifact-suffix }}.dmg"
-          final_path="$(dirname "$dmg")/$new_name"
-          mv "$dmg" "$final_path"
-          echo "DMG_PATH=$final_path" >>"$GITHUB_ENV"
+
+          dmg_dir="$bundle_root/dmg"
+          mkdir -p "$dmg_dir"
+          rm -f "$dmg_dir"/*.dmg
+
+          dmg_name="${slug}_${version}_${suffix}.dmg"
+          dmg_path="$dmg_dir/$dmg_name"
+
+          echo "Creating DMG $dmg_path from $app_bundle"
+          create-dmg --overwrite --volname "DBBS Faculty Match" "$dmg_path" "$app_bundle"
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "Failed to create DMG at $dmg_path" >&2
+            exit 1
+          fi
+          echo "DMG_PATH=$dmg_path" >>"$GITHUB_ENV"
 
 
       - name: Codesign macOS disk image
