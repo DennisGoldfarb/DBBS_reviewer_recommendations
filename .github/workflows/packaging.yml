@@ -24,7 +24,7 @@ jobs:
             artifact-suffix: windows_x64
           - os: macos-latest
             artifact-suffix: macos_arm64
-          - os: macos-13
+          - os: macos-15-intel
             artifact-suffix: macos_x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -207,7 +207,7 @@ jobs:
             artifact-suffix: windows_x64
           - os: macos-latest
             artifact-suffix: macos_arm64
-          - os: macos-13
+          - os: macos-15-intel
             artifact-suffix: macos_x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -230,6 +230,58 @@ jobs:
       - name: Install DMG tooling (macOS)
         if: runner.os == 'macOS'
         run: brew install create-dmg
+
+      - name: Install the Apple certificate and provisioning profile
+        if: runner.os == 'macOS'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          INSTALLER_CERT_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID }}
+          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
+          NOTARIZE_TEAM_ID: ${{ secrets.NOTARIZE_TEAM_ID }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          INSTALLER_CERT_PATH=$RUNNER_TEMP/installer_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          echo -n "$INSTALLER_CERT_BASE64" | base64 --decode -o $INSTALLER_CERT_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security import $INSTALLER_CERT_PATH -P "$INSTALLER_CERT_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security list-keychains -d user -s $KEYCHAIN_PATH login.keychain
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+
+      - uses: apple-actions/import-codesign-certs@v5
+        if: runner.os == 'macOS'
+        with:
+          p12-file-base64:   ${{ secrets.MACOS_CERT_P12 }}
+          p12-password:      ${{ secrets.MACOS_CERT_PASSWORD }}
+          keychain-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+          keychain:          signing_temp
+
+      - uses: apple-actions/import-codesign-certs@v5
+        if: runner.os == 'macOS'
+        with:
+          p12-file-base64:   ${{ secrets.MACOS_INSTALLER_CERT_P12 }}
+          p12-password:      ${{ secrets.MACOS_CERT_PASSWORD }}
+          keychain-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+          keychain:          signing_temp
+          create-keychain:   false
 
       - name: Read app metadata
         id: metadata
@@ -321,6 +373,40 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
 
+      - name: Codesign macOS app bundle
+        if: runner.os == 'macOS'
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          identity="${CODESIGN_IDENTITY:-}"
+          if [[ -z "$identity" ]]; then
+            echo "CODESIGN_IDENTITY secret must be provided" >&2
+            exit 1
+          fi
+
+          bundle_root="dbbs-faculty-match/src-tauri/target/release/bundle/macos"
+          app_bundle=$(find "$bundle_root" -maxdepth 1 -type d -name '*.app' | head -n 1)
+          if [[ -z "$app_bundle" ]]; then
+            echo "No .app bundle found in $bundle_root" >&2
+            find "$bundle_root" -maxdepth 2 -print >&2 || true
+            exit 1
+          fi
+
+          echo "Signing individual binaries inside $app_bundle"
+          while IFS= read -r -d '' executable; do
+            echo "  Signing $(basename "$executable")"
+            codesign --force --options runtime --timestamp --sign "$identity" "$executable"
+          done < <(find "$app_bundle/Contents" \
+              \( -path '*/MacOS/*' -o -path '*/Frameworks/*' -o -path '*/Helpers/*' -o -path '*/Library/*' \) \
+              -type f -perm -111 -print0)
+
+          echo "Signing app bundle $app_bundle"
+          codesign --force --options runtime --timestamp --sign "$identity" "$app_bundle"
+          codesign --verify --verbose "$app_bundle"
+
       - name: Locate and rename Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -355,19 +441,101 @@ jobs:
           Rename-Item -Path $installer.FullName -NewName $newName -Force
 
 
-      - name: Rename macOS disk image
+      - name: Create macOS disk image
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir="dbbs-faculty-match/src-tauri/target/release/bundle/dmg"
-          dmg=$(find "$bundle_dir" -maxdepth 1 -type f -name '*.dmg' | head -n 1)
-          if [[ -z "$dmg" ]]; then
-            echo "No DMG artifact found" >&2
+          slug="${{ steps.metadata.outputs.slug }}"
+          version="${{ steps.metadata.outputs.version }}"
+          suffix="${{ matrix.artifact-suffix }}"
+
+          bundle_root="dbbs-faculty-match/src-tauri/target/release/bundle"
+          app_bundle=$(find "$bundle_root/macos" -maxdepth 1 -type d -name '*.app' | head -n 1)
+          if [[ -z "$app_bundle" ]]; then
+            echo "No .app bundle found in $bundle_root/macos" >&2
+            find "$bundle_root/macos" -maxdepth 2 -print >&2 || true
             exit 1
           fi
-          new_name="${{ steps.metadata.outputs.slug }}_${{ steps.metadata.outputs.version }}_${{ matrix.artifact-suffix }}.dmg"
-          mv "$dmg" "$(dirname "$dmg")/$new_name"
+
+          dmg_dir="$bundle_root/dmg"
+          mkdir -p "$dmg_dir"
+          rm -f "$dmg_dir"/*.dmg
+
+          dmg_name="${slug}_${version}_${suffix}.dmg"
+          dmg_path="$dmg_dir/$dmg_name"
+
+          echo "Creating DMG $dmg_path from $app_bundle"
+          create-dmg --volname "DBBS Faculty Match" "$dmg_path" "$app_bundle"
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "Failed to create DMG at $dmg_path" >&2
+            exit 1
+          fi
+          echo "DMG_PATH=$dmg_path" >>"$GITHUB_ENV"
+
+
+      - name: Codesign macOS disk image
+        if: runner.os == 'macOS'
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="${DMG_PATH:-}"
+          if [[ -z "$dmg_path" ]]; then
+            echo "DMG_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          identity="${CODESIGN_IDENTITY:-}"
+          if [[ -z "$identity" ]]; then
+            echo "CODESIGN_IDENTITY secret must be provided" >&2
+            exit 1
+          fi
+          echo "Signing $dmg_path with identity $identity"
+          codesign --force --options runtime --timestamp --sign "$identity" "$dmg_path"
+          codesign --verify --verbose "$dmg_path"
+      - name: Notarize macOS disk image
+        if: runner.os == 'macOS'
+        timeout-minutes: 120
+        env:
+          NOTARIZE_APPLE_ID:  ${{ secrets.NOTARIZE_APPLE_ID }}
+          NOTARIZE_PASSWORD:  ${{ secrets.NOTARIZE_PASSWORD }}
+          NOTARIZE_TEAM_ID:   ${{ secrets.NOTARIZE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="${DMG_PATH:-}"
+          if [[ -z "$dmg_path" ]]; then
+            echo "DMG_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          xcrun notarytool store-credentials notary-profile \
+            --apple-id "$NOTARIZE_APPLE_ID" \
+            --team-id "$NOTARIZE_TEAM_ID" \
+            --password "$NOTARIZE_PASSWORD"
+          result=$(xcrun notarytool submit "$dmg_path" \
+            --keychain-profile notary-profile \
+            --wait --output-format json)
+          status=$(echo "$result" | jq -r '.status')
+          submission_id=$(echo "$result" | jq -r '.id')
+          if [[ "$status" != "Accepted" ]]; then
+            echo "Notarization failed: $status" >&2
+            if [[ -n "$submission_id" && "$submission_id" != "null" ]]; then
+              xcrun notarytool log "$submission_id" --keychain-profile notary-profile || true
+            fi
+            exit 1
+          fi
+      - name: Staple notarization ticket to DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="${DMG_PATH:-}"
+          if [[ -z "$dmg_path" ]]; then
+            echo "DMG_PATH environment variable is not set" >&2
+            exit 1
+          fi
+          xcrun stapler staple "$dmg_path"
 
       - name: Upload release artifacts
         shell: bash
