@@ -395,8 +395,29 @@ jobs:
             exit 1
           fi
 
+          embedding_helper_path="$app_bundle/Contents/MacOS/embedding-helper"
+          embedding_helper_entitlements="dbbs-faculty-match/src-tauri/macos/embedding-helper.entitlements"
+
+          if [[ -f "$embedding_helper_path" ]]; then
+            if [[ ! -f "$embedding_helper_entitlements" ]]; then
+              echo "Entitlements file not found at $embedding_helper_entitlements" >&2
+              exit 1
+            fi
+
+            echo "Applying entitlements to $(basename "$embedding_helper_path")"
+            codesign --force --options runtime --timestamp \
+              --entitlements "$embedding_helper_entitlements" \
+              --sign "$identity" \
+              "$embedding_helper_path"
+          else
+            echo "Embedding helper binary not found at $embedding_helper_path" >&2
+          fi
+
           echo "Signing individual binaries inside $app_bundle"
           while IFS= read -r -d '' executable; do
+            if [[ "$executable" == "$embedding_helper_path" ]]; then
+              continue
+            fi
             echo "  Signing $(basename "$executable")"
             codesign --force --options runtime --timestamp --sign "$identity" "$executable"
           done < <(find "$app_bundle/Contents" \
