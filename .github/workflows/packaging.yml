@@ -466,7 +466,7 @@ jobs:
           dmg_path="$dmg_dir/$dmg_name"
 
           echo "Creating DMG $dmg_path from $app_bundle"
-          create-dmg --overwrite --volname "DBBS Faculty Match" "$dmg_path" "$app_bundle"
+          create-dmg --volname "DBBS Faculty Match" "$dmg_path" "$app_bundle"
           if [[ ! -f "$dmg_path" ]]; then
             echo "Failed to create DMG at $dmg_path" >&2
             exit 1
