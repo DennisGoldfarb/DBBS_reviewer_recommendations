@@ -33,6 +33,7 @@ jobs:
         with:
           workspaces: dbbs-faculty-match/src-tauri
       - run: npm ci
+      - run: npm audit --audit-level=low
       - run: npm run tauri -- --version
       - run: npm run check
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
