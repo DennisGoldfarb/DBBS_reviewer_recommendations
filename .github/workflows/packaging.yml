@@ -8,6 +8,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
     inputs:
       tag_name:
@@ -137,30 +138,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release-id: ${{ steps.create-release.outputs.id }}
-      release-tag: ${{ steps.release-tag.outputs.value }}
+      release-tag: ${{ steps.release-tag.outputs.tag }}
+      release-version: ${{ steps.release-tag.outputs.version }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Determine release tag
         id: release-tag
         shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
-            echo "value=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+        run: node dbbs-faculty-match/scripts/release-version.mjs --check "$RELEASE_TAG"
 
       - name: Create GitHub release
         id: create-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.release-tag.outputs.value }}
+          RELEASE_TAG: ${{ steps.release-tag.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release-tag.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
 
           repo="${{ github.repository }}"
           release_tag="${RELEASE_TAG}"
-          release_name="DDBS Reviewer Recommendations v${release_tag}"
+          release_name="DBBS Reviewer Recommendations v${RELEASE_VERSION}"
           payload=$(jq -n \
             --arg tag "$release_tag" \
             --arg name "$release_name" \
@@ -215,6 +218,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.release-tag }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -222,6 +227,14 @@ jobs:
           node-version: 22
           cache: 'npm'
           cache-dependency-path: dbbs-faculty-match/package-lock.json
+
+      - name: Apply release version
+        id: metadata
+        shell: bash
+        working-directory: dbbs-faculty-match
+        env:
+          RELEASE_TAG: ${{ needs.create-release.outputs.release-tag }}
+        run: node scripts/release-version.mjs "$RELEASE_TAG"
 
       - name: Install frontend dependencies
         working-directory: dbbs-faculty-match
@@ -285,17 +298,6 @@ jobs:
           keychain-password: ${{ secrets.MACOS_CERT_PASSWORD }}
           keychain:          signing_temp
           create-keychain:   false
-
-      - name: Read app metadata
-        id: metadata
-        shell: bash
-        working-directory: dbbs-faculty-match
-        run: |
-          set -euo pipefail
-          slug=$(jq -r '.name' package.json)
-          version=$(jq -r '.version' src-tauri/tauri.conf.json)
-          echo "slug=${slug}" >>"$GITHUB_OUTPUT"
-          echo "version=${version}" >>"$GITHUB_OUTPUT"
 
       - name: Use short Cargo target dir (Windows)
         if: runner.os == 'Windows'

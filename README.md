@@ -100,5 +100,13 @@ Installer builds prepare the real embedding sidecar automatically. Unit tests
 exclude that bundled executable through a process-local Tauri configuration;
 they do not change installer configuration or download the embedding model.
 
+Release builds derive the app and installer version from the release tag. Both
+`v1.2.3` and `1.2.3` produce version `1.2.3`; prerelease tags are supported too.
+Manual releases use the supplied tag and check out that tag's code. CI validates
+the tag before creating the GitHub release, then stamps the Tauri, npm, and Cargo
+manifests and lockfiles before compiling. These generated version changes are
+not committed back to the repository. To check this logic locally, run
+`node --test scripts/release-version.test.mjs` from `dbbs-faculty-match/`.
+
 For architecture, maintenance guidance, and the manual desktop smoke test, see the
 [application developer guide](dbbs-faculty-match/README.md).
