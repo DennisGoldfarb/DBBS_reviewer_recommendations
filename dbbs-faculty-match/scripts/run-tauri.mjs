@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const args = process.argv.slice(2);
 const isBuildCommand = args[0] === 'build';
@@ -19,16 +18,12 @@ if (
   forwardedArgs.push('--bundles', 'app');
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const tauriExecutable = path.join(
-  __dirname,
-  '..',
-  'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'tauri.cmd' : 'tauri'
-);
+const require = createRequire(import.meta.url);
+const tauriCli = require.resolve('@tauri-apps/cli/tauri.js');
 
-const child = spawn(tauriExecutable, forwardedArgs, {
+// Launch the JS entry point with Node on every platform. Windows .cmd shims
+// cannot be spawned directly, and using a shell would alter argument handling.
+const child = spawn(process.execPath, [tauriCli, ...forwardedArgs], {
   stdio: 'inherit',
   env: process.env,
 });
