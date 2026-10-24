@@ -18,6 +18,7 @@ const distDir = path.join(buildDir, 'dist');
 const workDir = path.join(buildDir, 'work');
 const specDir = path.join(buildDir, 'spec');
 const metadataPath = path.join(buildDir, 'metadata.json');
+const verificationPath = path.join(__dirname, 'verify-sidecar.py');
 const sidecarName = 'embedding-helper';
 
 function fail(message) {
@@ -40,9 +41,20 @@ function hashFile(filePath) {
   return hash.digest('hex');
 }
 
+function hashPythonSources() {
+  const hash = createHash('sha256');
+  for (const name of fs.readdirSync(pythonDir).filter((entry) => entry.endsWith('.py')).sort()) {
+    hash.update(name);
+    hash.update(fs.readFileSync(path.join(pythonDir, name)));
+  }
+  return hash.digest('hex');
+}
+
 const metadataSignature = {
-  scriptHash: hashFile(scriptPath),
+  scriptHash: hashPythonSources(),
   requirementsHash: hashFile(requirementsPath),
+  builderHash: hashFile(__filename),
+  verifierHash: hashFile(verificationPath),
 };
 
 function readMetadata() {
@@ -70,6 +82,8 @@ function runCommand(command, args, options = {}) {
       ...process.env,
       PIP_DISABLE_PIP_VERSION_CHECK: '1',
       PYTHONUTF8: '1',
+      USE_TF: '0',
+      USE_FLAX: '0',
       ...(options.env || {}),
     },
     shell: options.shell ?? false,
@@ -169,6 +183,7 @@ function buildSidecar(pythonExecutable, targetTriple) {
   const pyInstallerArgs = [
     '-m',
     'PyInstaller',
+    '--clean',
     '--onefile',
     '--name',
     sidecarName,
@@ -180,6 +195,10 @@ function buildSidecar(pythonExecutable, targetTriple) {
     'torch',
     '--collect-data',
     'torch',
+    // This helper handles text with PyTorch; optional image/audio/training
+    // libraries in a developer's Python environment are not runtime dependencies.
+    ...['tensorflow', 'jax', 'matplotlib', 'sklearn', 'scipy', 'pandas', 'PIL',
+      'torchvision', 'torchaudio', 'librosa', 'cv2', 'spacy'].flatMap((name) => ['--exclude-module', name]),
     '--distpath',
     distDir,
     '--workpath',
@@ -189,7 +208,9 @@ function buildSidecar(pythonExecutable, targetTriple) {
     scriptPath,
   ];
 
-  runCommand(pythonExecutable, pyInstallerArgs);
+  runCommand(pythonExecutable, pyInstallerArgs, {
+    env: { PYINSTALLER_CONFIG_DIR: path.join(buildDir, 'pyinstaller-cache') },
+  });
 
   const extension = process.platform === 'win32' ? '.exe' : '';
   const builtBinary = path.join(distDir, `${sidecarName}${extension}`);
@@ -209,6 +230,8 @@ function buildSidecar(pythonExecutable, targetTriple) {
   const destinationPath = path.join(binariesDir, destinationName);
   fs.renameSync(builtBinary, destinationPath);
 
+  runCommand(pythonExecutable, [verificationPath, destinationPath, pythonDir]);
+
   console.log(`\u2705 Built sidecar binary at ${destinationPath}`);
   return destinationName;
 }
@@ -222,6 +245,8 @@ if (
   existingMetadata &&
   existingMetadata.scriptHash === metadataSignature.scriptHash &&
   existingMetadata.requirementsHash === metadataSignature.requirementsHash &&
+  existingMetadata.builderHash === metadataSignature.builderHash &&
+  existingMetadata.verifierHash === metadataSignature.verifierHash &&
   existingMetadata.targetTriple === targetTriple &&
   fs.existsSync(existingBinaryPath)
 ) {
@@ -229,7 +254,9 @@ if (
   process.exit(0);
 }
 
-const pythonExecutable = prepareVirtualEnv();
+// An explicitly supplied interpreter can reuse an already prepared environment.
+const pythonExecutable = process.env.DDBS_SIDECAR_PYTHON || prepareVirtualEnv();
+ensureExists(pythonExecutable, 'Sidecar Python interpreter');
 const producedBinaryName = buildSidecar(pythonExecutable, targetTriple);
 writeMetadata({
   ...metadataSignature,

@@ -1,0 +1,335 @@
+.program-checkbox-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.checkbox-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  border-radius: 12px;
+  border: 1px solid var(--washu-border);
+  padding: 0.65rem 0.9rem;
+  background: var(--washu-surface);
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.checkbox-option:hover {
+  border-color: var(--washu-primary);
+  box-shadow: 0 4px 14px var(--washu-primary-shadow);
+}
+
+.checkbox-option input[type="checkbox"] {
+  margin-top: 0.15rem;
+  accent-color: var(--washu-primary);
+}
+
+.checkbox-option span {
+  color: var(--washu-heading);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.status-banner {
+  margin-top: 1.5rem;
+  padding: 0.85rem 1.15rem;
+  border-radius: 12px;
+  font-weight: 500;
+  box-shadow: 0 12px 28px var(--washu-shadow);
+}
+
+.status-success {
+  background: var(--washu-accent-soft);
+  color: var(--washu-accent);
+  border: 1px solid var(--washu-border);
+}
+
+.status-error {
+  background: var(--washu-danger-soft);
+  color: var(--washu-danger);
+  border: 1px solid var(--washu-border);
+}
+
+.status-info {
+  background: var(--washu-info-soft);
+  color: var(--washu-info);
+  border: 1px solid var(--washu-border);
+}
+
+.result-card {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: var(--washu-surface);
+  border: 1px solid var(--washu-border);
+  box-shadow: 0 18px 48px var(--washu-shadow-strong);
+}
+
+.result-card h2 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.warning-list {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--washu-warning);
+}
+
+.detail-grid {
+  margin-top: 1.35rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.detail-card {
+  padding: 0.95rem 1.05rem;
+  border-radius: 14px;
+  background: var(--washu-surface-muted);
+  border: 1px solid var(--washu-border);
+}
+
+.detail-card h3 {
+  margin-top: 0;
+  margin-bottom: 0.55rem;
+  font-size: 1rem;
+}
+
+.detail-card dl {
+  margin: 0;
+}
+
+.detail-card dt {
+  font-weight: 600;
+  color: var(--washu-heading);
+  margin-top: 0.5rem;
+}
+
+.detail-card dd {
+  margin: 0.15rem 0 0;
+  color: var(--washu-text-muted);
+}
+
+.match-results {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.directory-results {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.directory-results .spreadsheet-preview-card {
+  margin-top: 0.75rem;
+}
+
+.directory-results .button-row {
+  justify-content: flex-start;
+}
+
+.match-card {
+  border: 1px solid var(--washu-border);
+  border-radius: 16px;
+  background: var(--washu-surface);
+  padding: 1.25rem;
+  box-shadow: 0 16px 36px var(--washu-shadow);
+}
+
+.match-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.match-card-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.match-prompt {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  background: var(--washu-accent-soft);
+  color: var(--washu-accent);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family:
+    "ui-monospace", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 0.95rem;
+}
+
+.match-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.match-list-item {
+  border: 1px solid var(--washu-border);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  background: var(--washu-surface-muted);
+  box-shadow: 0 8px 20px var(--washu-shadow-soft);
+}
+
+.match-list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.match-rankings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+
+.match-rank {
+  font-weight: 700;
+  color: var(--washu-primary);
+  font-size: 1.1rem;
+}
+
+.match-student-rank {
+  font-weight: 600;
+  color: var(--washu-accent);
+  font-size: 0.95rem;
+}
+
+.match-score {
+  color: var(--washu-text-muted);
+  font-size: 0.9rem;
+}
+
+.match-identifiers {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.1rem;
+}
+
+.match-identifier {
+  font-size: 0.95rem;
+  color: var(--washu-heading);
+}
+
+.match-identifier-label {
+  font-weight: 600;
+  color: var(--washu-text-muted);
+}
+
+.match-faculty-text {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  background: var(--washu-page-strong);
+  color: var(--washu-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family:
+    "ui-monospace", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  box-shadow: inset 0 2px 6px var(--washu-shadow-soft);
+}
+
+.match-empty {
+  margin-top: 1rem;
+  color: var(--washu-text-muted);
+  font-style: italic;
+}
+
+.path-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.path-list li {
+  word-break: break-all;
+  font-size: 0.9rem;
+}
+
+.prompt-preview {
+  background: var(--washu-accent-soft);
+  color: var(--washu-accent);
+  padding: 1rem;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family:
+    "ui-monospace", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+.faculty-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--washu-surface);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.faculty-table th,
+.faculty-table td {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--washu-border);
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.faculty-table th {
+  background: var(--washu-surface-muted);
+  color: var(--washu-heading);
+}
+
+.faculty-table td {
+  color: var(--washu-text);
+}
+
+.faculty-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.remove-button {
+  background: transparent;
+  color: var(--washu-danger);
+  border: 1px solid var(--washu-border-strong);
+  padding: 0.55rem 0.9rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.remove-button:hover {
+  background: var(--washu-danger-soft);
+  box-shadow: none;
+  transform: none;
+}
+
+.faculty-entry-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  align-items: center;
+}

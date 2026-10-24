@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "DBBS Faculty Match",
+        "theme": "Dark",
+        "dragDropEnabled": true,
         "width": 1280,
         "height": 1200,
         "minWidth": 1120,

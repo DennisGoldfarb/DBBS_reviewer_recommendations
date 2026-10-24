@@ -1,0 +1,41 @@
+name: Code checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: dbbs-faculty-match
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dbbs-faculty-match/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dbbs-faculty-match/src-tauri
+      - run: npm ci
+      - run: npm run tauri -- --version
+      - run: npm run check
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+      - run: npm run lint:backend
+      - run: npm run test:backend
+      - run: python -m unittest discover -s python/tests -v

@@ -4,32 +4,31 @@ import re
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from typing import Dict, Tuple
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_FLAX", "0")
 
-try:
-    from transformers import AutoModel, AutoTokenizer
-    from transformers.utils import logging as hf_logging
-except ImportError as exc:
-    sys.stderr.write("Install the 'transformers' package (with torch) to generate embeddings.\n")
-    sys.stderr.write(str(exc) + "\n")
-    sys.exit(1)
+from faculty_preparation import prepare_faculty_texts
+from student_chunking import student_embedding_inputs
+from embedding_config import MODEL_NAME, MODEL_REVISION, MAX_INPUT_TOKENS
 
-try:
-    import torch
-except ImportError as exc:
-    sys.stderr.write("Install the 'torch' package to generate embeddings.\n")
-    sys.stderr.write(str(exc) + "\n")
-    sys.exit(1)
+_TOKENIZER = None
+_MODEL = None
 
-hf_logging.set_verbosity_error()
 
-TokenizerCache = Dict[str, AutoTokenizer]
-ModelCache = Dict[str, AutoModel]
-
-_TOKENIZERS: TokenizerCache = {}
-_MODELS: ModelCache = {}
+def load_runtime():
+    """Load optional ML dependencies only when an embedding is requested."""
+    try:
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+        from transformers.utils import logging as hf_logging
+    except ImportError as exc:
+        raise RuntimeError(
+            "Install the 'transformers' and 'torch' packages to generate embeddings."
+        ) from exc
+    hf_logging.set_verbosity_error()
+    return torch, AutoTokenizer, AutoModel
 
 
 def sanitize_utf8_text(text: str) -> str:
@@ -116,22 +115,44 @@ def emit_progress(payload: dict) -> None:
     sys.stderr.flush()
 
 
-def load_model(model_name: str) -> Tuple[AutoTokenizer, AutoModel]:
-    tokenizer = _TOKENIZERS.get(model_name)
-    model = _MODELS.get(model_name)
-
-    if tokenizer is None or model is None:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModel.from_pretrained(model_name)
+def load_model():
+    global _TOKENIZER, _MODEL
+    if _TOKENIZER is None or _MODEL is None:
+        _, AutoTokenizer, AutoModel = load_runtime()
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, revision=MODEL_REVISION)
+        model = AutoModel.from_pretrained(MODEL_NAME, revision=MODEL_REVISION)
         model.eval()
-        _TOKENIZERS[model_name] = tokenizer
-        _MODELS[model_name] = model
+        _TOKENIZER, _MODEL = tokenizer, model
+    return _TOKENIZER, _MODEL
 
-    return tokenizer, model
+
+def normalize_embedding_row(index, item):
+    row_id = item.get("id") if isinstance(item, Mapping) else None
+    text = item.get("text") if isinstance(item, Mapping) else item
+    try:
+        identifier = row_id if isinstance(row_id, int) else int(str(row_id))
+    except (TypeError, ValueError):
+        identifier = index
+    return {"id": identifier, "text": normalize_text_value(text)}
+
+
+def embed_tokenized_inputs(inputs, model, torch):
+    """Mean pooling shared by short inputs, student chunks, and faculty text."""
+    with torch.no_grad():
+        outputs = model(**inputs)
+    last_hidden = outputs.last_hidden_state
+    attention_mask = inputs["attention_mask"]
+    mask = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
+    masked = last_hidden * mask
+    summed = masked.sum(dim=1)
+    counts = mask.sum(dim=1).clamp(min=1e-9)
+    return (summed / counts).squeeze(0).tolist()
 
 
 def process_embedding_request(payload: dict) -> dict:
-    model_name = payload.get("model") or "NeuML/pubmedbert-base-embeddings"
+    model_name = payload.get("model") or MODEL_NAME
+    if model_name != MODEL_NAME:
+        raise ValueError("This app uses PubMedBERT. Update faculty embeddings to replace an experimental model index before matching.")
     texts = payload.get("texts") or []
     total = len(texts)
 
@@ -164,13 +185,28 @@ def process_embedding_request(payload: dict) -> dict:
     emit_progress(
         {
             "phase": "loading-model",
-            "message": "Loading PubMedBERT model…",
+            "message": f"Loading {model_name.rsplit('/', 1)[-1]} model…",
             "processedRows": 0,
             "totalRows": total,
         }
     )
 
-    tokenizer, model = load_model(model_name)
+    tokenizer, model = load_model()
+    torch, _, _ = load_runtime()
+
+    normalized_texts = [normalize_embedding_row(index, item) for index, item in enumerate(texts)]
+    faculty_options = payload.get("facultyPreparation")
+    prepared = {}
+    if faculty_options is not None:
+        if not isinstance(faculty_options, Mapping):
+            raise ValueError("Faculty preparation options must be a JSON object.")
+        emit_progress({
+            "phase": "checking-lengths",
+            "message": "Checking faculty descriptions against the embedding model's token limit…",
+            "processedRows": 0,
+            "totalRows": total,
+        })
+        prepared = prepare_faculty_texts(normalized_texts, tokenizer, emit_progress)
 
     emit_progress(
         {
@@ -186,27 +222,10 @@ def process_embedding_request(payload: dict) -> dict:
 
     rows = []
     skipped_rows = []
-    for index, item in enumerate(texts):
-        if isinstance(item, Mapping):
-            row_id = item.get("id")
-            raw_text = item.get("text")
-        else:
-            row_id = None
-            raw_text = item
-
-        text = normalize_text_value(raw_text)
-        if isinstance(row_id, int):
-            identifier = row_id
-        else:
-            try:
-                identifier = int(str(row_id))
-            except (TypeError, ValueError):
-                identifier = index
-
-        if not isinstance(text, str):
-            text = str(text)
-
-        text = text.strip()
+    for item in normalized_texts:
+        identifier = item["id"]
+        preparation = prepared.get(identifier)
+        text = preparation["text"] if preparation else item["text"]
 
         if not text:
             skipped_rows.append({
@@ -230,14 +249,16 @@ def process_embedding_request(payload: dict) -> dict:
             continue
 
         try:
-            inputs = tokenizer(
-                text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=512,
-                padding=True,
-            )
+            if faculty_options is None:
+                input_chunks = list(student_embedding_inputs(tokenizer, text))
+            else:
+                input_chunks = [tokenizer(
+                    text, return_tensors="pt", truncation=True,
+                    max_length=MAX_INPUT_TOKENS, padding=True,
+                )]
         except Exception as exc:  # noqa: BLE001
+            if faculty_options is not None:
+                raise RuntimeError(f"Unable to tokenize faculty row {identifier + 1}: {exc}") from exc
             reason = str(exc).splitlines()[0]
             skipped_rows.append(
                 {
@@ -261,18 +282,23 @@ def process_embedding_request(payload: dict) -> dict:
             )
             continue
 
-        with torch.no_grad():
-            outputs = model(**inputs)
+        embeddings = []
+        for chunk_index, inputs in enumerate(input_chunks):
+            embeddings.append(embed_tokenized_inputs(inputs, model, torch))
+            if len(input_chunks) > 1:
+                emit_progress({
+                    "phase": "embedding",
+                    "message": f"Embedded section {chunk_index + 1} of {len(input_chunks)} for {singular_label} {identifier + 1}…",
+                    "processedRows": len(rows), "totalRows": total,
+                    "elapsedSeconds": time.time() - start_time,
+                })
 
-        last_hidden = outputs.last_hidden_state
-        attention_mask = inputs["attention_mask"]
-        mask = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
-        masked = last_hidden * mask
-        summed = masked.sum(dim=1)
-        counts = mask.sum(dim=1).clamp(min=1e-9)
-        embedding = (summed / counts).squeeze(0)
-
-        rows.append({"id": identifier, "embedding": embedding.tolist()})
+        row = {"id": identifier, "embedding": embeddings[0]}
+        if len(embeddings) > 1:
+            row["additionalEmbeddings"] = embeddings[1:]
+        if preparation:
+            row["preparation"] = preparation
+        rows.append(row)
 
         processed = len(rows)
         elapsed = time.time() - start_time
@@ -323,6 +349,8 @@ def process_embedding_request(payload: dict) -> dict:
 
 
 def handle_command(payload: dict) -> dict:
+    if not isinstance(payload, Mapping):
+        return {"error": "The embedding request must be a JSON object."}
     command = payload.get("command")
 
     if command == "shutdown":
