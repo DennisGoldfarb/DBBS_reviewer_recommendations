@@ -1,9 +1,12 @@
-# DDBS Reviewer Recommendations
+# DBBS Reviewer Recommendations
 
-A Tauri desktop application that recommends faculty reviewers from shared student
-and faculty research interests. The React interface calls a Rust backend; a bundled
-Python helper generates PubMedBERT embeddings locally on CPU. The model may need to be
-downloaded the first time it runs.
+The DBBS Reviewer Recommendations desktop app pairs students with faculty based on
+shared research interests, for admissions reviews, qualifying exam committees,
+and rotations.
+
+The React interface calls a Rust backend; a bundled Python helper generates
+PubMedBERT embeddings locally on CPU. The model may need to be downloaded the
+first time it runs.
 
 ## Using the app
 
