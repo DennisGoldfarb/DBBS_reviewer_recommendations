@@ -35,6 +35,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=low
       - run: npm run tauri -- --version
+      - run: node --test scripts/release-version.test.mjs
       - run: npm run check
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
       - run: npm run lint:backend
