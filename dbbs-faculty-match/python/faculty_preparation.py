@@ -40,11 +40,12 @@ class LocalWordPruner:
         self.previous_threads = torch.get_num_threads()
         torch.set_num_threads(min(2, os.cpu_count() or 1))
         self.tokenizer = AutoTokenizer.from_pretrained(
-            PRUNING_MODEL, revision=PRUNING_REVISION, use_fast=True
+            PRUNING_MODEL, revision=PRUNING_REVISION, use_fast=True,
+            trust_remote_code=False,
         )
         self.model = AutoModelForTokenClassification.from_pretrained(
             PRUNING_MODEL, revision=PRUNING_REVISION,
-            torch_dtype=torch.float32, use_safetensors=True,
+            torch_dtype=torch.float32, use_safetensors=True, trust_remote_code=False,
         ).to("cpu").eval()
 
     def score_words(self, text, spans):

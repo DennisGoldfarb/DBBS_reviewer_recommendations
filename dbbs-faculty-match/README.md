@@ -115,6 +115,12 @@ revision once per helper process. Inference uses attention-mask mean pooling on
 CPU, without retrieval prefixes or an extra normalization pass. Cosine similarity
 handles vector normalization during ranking.
 
+Both model loaders explicitly require Safetensors weights and disable remote
+model code. Missing safe weights stop the operation rather than falling back to
+pickle-based checkpoints. These guards reduce model-loading exposure but do not
+resolve advisories against the older PyTorch/Transformers dependencies retained
+for Intel Mac support. Updating that runtime remains a separate compatibility task.
+
 Faculty refreshes, imports, prompt matching, spreadsheet rows, and folder runs all
 use PubMedBERT. **Update faculty embeddings** replaces an index with freshly
 prepared PubMedBERT vectors. An experimental model index produces an actionable

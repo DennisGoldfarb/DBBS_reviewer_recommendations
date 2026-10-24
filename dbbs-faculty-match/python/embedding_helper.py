@@ -119,8 +119,13 @@ def load_model():
     global _TOKENIZER, _MODEL
     if _TOKENIZER is None or _MODEL is None:
         _, AutoTokenizer, AutoModel = load_runtime()
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, revision=MODEL_REVISION)
-        model = AutoModel.from_pretrained(MODEL_NAME, revision=MODEL_REVISION)
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_NAME, revision=MODEL_REVISION, trust_remote_code=False,
+        )
+        model = AutoModel.from_pretrained(
+            MODEL_NAME, revision=MODEL_REVISION,
+            use_safetensors=True, trust_remote_code=False,
+        )
         model.eval()
         _TOKENIZER, _MODEL = tokenizer, model
     return _TOKENIZER, _MODEL

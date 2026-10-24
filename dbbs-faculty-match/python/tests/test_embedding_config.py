@@ -25,9 +25,28 @@ class EmbeddingConfigurationTests(unittest.TestCase):
                 patch.object(helper, "load_runtime", return_value=(None, tokenizer_factory, model_factory)):
             first = helper.load_model()
             self.assertEqual(helper.load_model(), first)
-        tokenizer_factory.from_pretrained.assert_called_once_with(MODEL_NAME, revision=MODEL_REVISION)
-        model_factory.from_pretrained.assert_called_once_with(MODEL_NAME, revision=MODEL_REVISION)
+        tokenizer_factory.from_pretrained.assert_called_once_with(
+            MODEL_NAME, revision=MODEL_REVISION, trust_remote_code=False,
+        )
+        model_factory.from_pretrained.assert_called_once_with(
+            MODEL_NAME, revision=MODEL_REVISION,
+            use_safetensors=True, trust_remote_code=False,
+        )
         model_factory.from_pretrained.return_value.eval.assert_called_once()
+
+    def test_missing_safe_weights_fail_without_retrying_an_unsafe_format(self):
+        tokenizer_factory, model_factory = Mock(), Mock()
+        model_factory.from_pretrained.side_effect = OSError("Safetensors weights unavailable")
+        with patch.object(helper, "_TOKENIZER", None), patch.object(helper, "_MODEL", None), \
+                patch.object(helper, "load_runtime", return_value=(None, tokenizer_factory, model_factory)):
+            with self.assertRaisesRegex(OSError, "Safetensors weights unavailable"):
+                helper.load_model()
+            self.assertIsNone(helper._TOKENIZER)
+            self.assertIsNone(helper._MODEL)
+        model_factory.from_pretrained.assert_called_once_with(
+            MODEL_NAME, revision=MODEL_REVISION,
+            use_safetensors=True, trust_remote_code=False,
+        )
 
     def test_unsupported_model_fails_before_loading_any_runtime(self):
         with patch.object(helper, "load_runtime") as runtime, patch.object(helper, "load_model") as model:

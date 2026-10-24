@@ -141,6 +141,25 @@ class FacultyPreparationTests(unittest.TestCase):
 
 
 class FullSourceScoringTests(unittest.TestCase):
+    def test_pruning_model_requires_safe_weights_and_disables_remote_code(self):
+        tokenizer_factory, model_factory = Mock(), Mock()
+        torch = SimpleNamespace(get_num_threads=lambda: 4, set_num_threads=Mock(), float32="float32")
+        transformers = SimpleNamespace(
+            AutoTokenizer=tokenizer_factory, AutoModelForTokenClassification=model_factory,
+        )
+        pruner = preparation.LocalWordPruner()
+        with patch.dict(sys.modules, {"torch": torch, "transformers": transformers}):
+            pruner._load()
+            tokenizer_factory.from_pretrained.assert_called_once_with(
+                preparation.PRUNING_MODEL, revision=preparation.PRUNING_REVISION,
+                use_fast=True, trust_remote_code=False,
+            )
+            model_factory.from_pretrained.assert_called_once_with(
+                preparation.PRUNING_MODEL, revision=preparation.PRUNING_REVISION,
+                torch_dtype="float32", use_safetensors=True, trust_remote_code=False,
+            )
+            pruner.close()
+
     def test_all_windows_are_scored_and_subwords_and_overlap_are_averaged(self):
         class Logits:
             def __init__(self, probabilities):
