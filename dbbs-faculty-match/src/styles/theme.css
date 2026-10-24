@@ -1,0 +1,90 @@
+:root {
+  font-family:
+    "Inter",
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Helvetica Neue",
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--washu-text);
+  background-color: var(--washu-page);
+
+  --washu-page: #fdf8f4;
+  --washu-page-strong: #f5ebe3;
+  --washu-surface: #ffffff;
+  --washu-surface-muted: #fbf2ed;
+  --washu-border: #e5d5c9;
+  --washu-border-strong: #d6bfaf;
+  --washu-text: #32201c;
+  --washu-heading: #21110f;
+  --washu-text-muted: #7f6a64;
+  --washu-primary: #ad0000;
+  --washu-primary-dark: #7f0000;
+  --washu-primary-soft: #f8d8d8;
+  --washu-accent: #5c1764;
+  --washu-accent-soft: #f2e3f6;
+  --washu-info: #005f9e;
+  --washu-info-soft: #e0f0fa;
+  --washu-warning: #b45309;
+  --washu-warning-soft: #faead7;
+  --washu-danger: #8c1c13;
+  --washu-danger-soft: #f7dfdc;
+  --washu-shadow-soft: rgba(61, 37, 25, 0.04);
+  --washu-shadow: rgba(61, 37, 25, 0.08);
+  --washu-shadow-strong: rgba(61, 37, 25, 0.14);
+  --washu-primary-shadow: rgba(173, 0, 0, 0.18);
+  --washu-primary-shadow-strong: rgba(173, 0, 0, 0.26);
+  --washu-accent-shadow: rgba(92, 23, 100, 0.22);
+  --washu-accent-shadow-strong: rgba(92, 23, 100, 0.3);
+  --washu-info-shadow: rgba(0, 95, 158, 0.18);
+  --washu-info-shadow-strong: rgba(0, 95, 158, 0.26);
+  --washu-overlay: rgba(46, 45, 41, 0.35);
+  --washu-focus-ring: rgba(173, 0, 0, 0.2);
+  --washu-button-text: #ffffff;
+  --washu-info-border-strong: rgba(0, 95, 158, 0.35);
+  --washu-danger-border-strong: rgba(140, 28, 19, 0.4);
+}
+
+:root[data-theme="dark"] {
+  color: #e2e8f0;
+  background-color: #0f172a;
+
+  --washu-page: #0f172a;
+  --washu-page-strong: #0b1120;
+  --washu-surface: #1e293b;
+  --washu-surface-muted: #111827;
+  --washu-border: #334155;
+  --washu-border-strong: #1f2937;
+  --washu-text: #e2e8f0;
+  --washu-heading: #f8fafc;
+  --washu-text-muted: #cbd5f5;
+  --washu-primary: #2563eb;
+  --washu-primary-dark: #1d4ed8;
+  --washu-primary-soft: rgba(37, 99, 235, 0.2);
+  --washu-accent: #1d4ed8;
+  --washu-accent-soft: rgba(59, 130, 246, 0.16);
+  --washu-info: #0ea5e9;
+  --washu-info-soft: rgba(14, 165, 233, 0.18);
+  --washu-warning: #b45309;
+  --washu-warning-soft: rgba(180, 83, 9, 0.2);
+  --washu-danger: #8c1c13;
+  --washu-danger-soft: rgba(220, 38, 38, 0.22);
+  --washu-shadow-soft: rgba(15, 23, 42, 0.3);
+  --washu-shadow: rgba(15, 23, 42, 0.4);
+  --washu-shadow-strong: rgba(2, 6, 23, 0.65);
+  --washu-primary-shadow: rgba(37, 99, 235, 0.35);
+  --washu-primary-shadow-strong: rgba(37, 99, 235, 0.45);
+  --washu-accent-shadow: rgba(29, 78, 216, 0.28);
+  --washu-accent-shadow-strong: rgba(29, 78, 216, 0.38);
+  --washu-info-shadow: rgba(14, 165, 233, 0.2);
+  --washu-info-shadow-strong: rgba(14, 165, 233, 0.35);
+  --washu-overlay: rgba(15, 23, 42, 0.55);
+  --washu-focus-ring: rgba(37, 99, 235, 0.25);
+  --washu-button-text: #f8fafc;
+  --washu-info-border-strong: rgba(56, 189, 248, 0.35);
+  --washu-danger-border-strong: rgba(248, 113, 113, 0.35);
+}

@@ -1,0 +1,39 @@
+.file-drop-zone {
+  min-width: 0;
+  padding: 1rem;
+  border: 2px dashed var(--washu-border);
+  border-radius: 12px;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.file-drop-zone-active {
+  border-color: var(--washu-primary);
+  background: var(--washu-primary-soft);
+}
+
+.file-drop-zone[aria-disabled="true"] {
+  opacity: 0.6;
+}
+
+.file-drop-hint {
+  margin: 0 0 0.75rem;
+  color: var(--washu-text-muted);
+  font-weight: 600;
+}
+
+.button-row input[type="text"] {
+  flex: 1;
+  min-width: 10rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--washu-border);
+  border-radius: 10px;
+  background: var(--washu-surface);
+  color: var(--washu-text);
+}
+
+input[type="text"]:focus-visible {
+  outline: 2px solid var(--washu-primary);
+  outline-offset: 2px;
+}
